@@ -1,0 +1,2264 @@
+---
+title: "Electricity"
+author: "Gary Liu"
+date: "2018/5/10"
+output:
+  html_notebook:
+    highlight: pygments
+    number_sections: no
+    theme: lumen
+    toc: yes
+    toc_float:
+      collapsed: no
+      smooth_scroll: no
+  html_document:
+    df_print: paged
+    toc: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache = T)
+windowsFonts("?L?n??????" = windowsFont("?L?n??????"))
+#update font 
+library(ggplot2)
+theme_set(theme_bw() +
+        theme(axis.text.x = element_text(angle = 90, size = 20,
+                                         family = '?L?n??????'),
+        axis.text.y = element_text(size = 20, family = '?L?n??????'),
+        axis.title.x = element_text(size = 20, family = '?L?n??????',
+                                    margin = margin(20, 0, 0, 0)),
+        axis.title.y = element_text(size = 20, family = '?L?n??????',
+                                    margin = margin(0, 20, 0, 0)),
+        plot.title = element_text(size = 30, hjust = 0.5, family = '?L?n??????',
+                             margin = margin(0, 0, 20, 0)),
+        plot.subtitle=element_text(size = 20, hjust=0.5, family = "?L?n??????",
+                                   color="black"),
+        legend.text = element_text(size = 15, family = '?L?n??????'),
+        legend.title = element_text(size = 20, family = '?L?n??????'),
+        legend.margin=margin(c(15,1,1,5)),
+        plot.margin = unit(c(1,1,1.5,1.2),"cm")))
+```
+
+
+```{r packages, include=F}
+#install.packages("readODS", "stringr", "fields", "reshape2")
+packages <- c("readODS", "magrittr", "ggplot2", "readxl", 
+              "stringr", "fields", "reshape2", "readr", 
+              "stats", "aplpack", "tseries", "strucchange",
+              "forecast", "dtw", "tidyr", "naniar", 
+              "stringr", "reshape", "dplyr",
+              "ComplexHeatmap", "ggrepel", "plotrix", 
+              "RColorBrewer", "coRanking", "wordspace")
+lapply(packages, library, character.only = T)
+```
+
+#1. Company {.tabset}
+##Company
+####1. Read Company
+```{r Read Company}
+company <- read_xls("industry.xls")
+industrial.index <- company[, c(1,4)]
+company <- company[,c(1,5)]
+company <- company[-c(1,nrow(company)),]
+names(company) <- c("Date", "TotalUsage")
+#?~??1989~
+company <- company[-c(1:84), ]
+```
+
+---
+
+####2. Season
+```{r season}
+#season
+company$season <- rep(rep(1:4, each = 3), times = (nrow(company) / 12))
+company$season <- as.factor(company$season)
+```
+
+---
+
+####3. Data Structure
+```{r data structure for industry}
+#str(industry)
+company$Date <- sapply(company$Date, function(x){
+  paste0(x,"-01")
+})
+company$Date <- as.POSIXct(company$Date, format = "%Y-%m-%d")
+company$TotalUsage <- as.numeric(company$TotalUsage)
+```
+
+##Variables
+####1-1. Read EachIndustry
+```{r Read EachIndustry, warning=F}
+EachIndustry <- read_xls("EachIndustry.xls")
+names(EachIndustry) <- c("Date", "Industry", "EmployedNum", "Salary",
+                    "RegularEarnings", "AvgHour", "Productivity", "SalaryIndex")
+EachIndustry$Productivity <- sub(pattern = "-", replacement = NA,
+                                 x = EachIndustry$Productivity)
+
+#?u?n1982??
+EachIndustry[, 1] %>%
+  as.matrix() %>%
+  grep(pattern = "78", x = .) %>%
+  .[1]
+#???n2018
+EachIndustry[, 1] %>%
+  as.matrix() %>%
+  grep(pattern = "107", x = .) %>%
+  .[1]
+
+#Employ
+Employ <- EachIndustry %>%
+  slice(., 2383:8058) %>%
+  .[, c(1:5, 7)]
+```
+
+
+####1-2. EachIndustry Format
+```{r EachIndustry Format}
+#?o?{?��?97?~?M98?~?O?@???????A97?H?e?u??16???ܼ?
+Employ %>%
+  group_by(Date) %>%
+  summarise(count = n_distinct(Industry)) %$%
+  unique(.$count)
+
+#?M?????Ӳ??~?O?h?X?Ӫ?
+temp <- EachIndustry[, 1] %>%
+  grep(pattern = "97", x = .) %>%
+  .[1:16] %>%
+  EachIndustry[., 2]
+temp.2 <-EachIndustry[, 1] %>%
+  grep(pattern = "98", x = .) %>%
+  .[1:17] %>%
+  EachIndustry[., 2]
+#?o?{?O?Ш|
+temp.2[!temp.2 %in% temp]
+
+#???Ҽ{?Ш|?~
+Employ %<>%
+  filter(!Industry == "?Ш|?A?ȷ~")
+
+
+#???~??
+Employ$Date <- rep(seq.POSIXt(
+  from = as.POSIXct("1989-01-01", format = "%Y-%m-%d"),
+  to = as.POSIXct("2017-12-01", format = "%Y-%m-%d"), 
+  by = "month"), each = 16)
+
+#?ҰʥͲ??O????:80%?H?W??NA
+miss_var_summary(Employ)
+#NA?e???Ӱ??A?NProductivity?R??
+Employ <- Employ[, -6]
+
+#?榡
+Employ$EmployedNum <- as.numeric(Employ$EmployedNum)
+Employ$Salary <- as.numeric(Employ$Salary)
+Employ$RegularEarnings <- as.numeric(Employ$RegularEarnings)
+```
+
+####1-3. Rename Industry
+```{r Rename Industry}
+Employ$Industry <- as.factor(Employ$Industry)
+levels(Employ$Industry) <- c("???ʲ?", "?q?O?οU??", "???ķ~", "?q?~", "???o?s??",
+                                        "???L?A??", "?????O??", "?T?֥???", "???y",
+                                        "?Τ??ΦìV???v", "?B?????x", "?䴩?A??", "?s?y",
+                                        "???J?\??","?M?~?޳N?A??", "???T?q?T?Ǽ?")
+Employ$Industry <- as.character(Employ$Industry)
+```
+
+####1-4. Population & Salary
+```{r Population & Salary}
+
+#?NEmploy?u?}
+#1. number
+employednum <- Employ %>%
+  select(-c(Salary, RegularEarnings)) %$%
+  spread(data = ., Industry, EmployedNum)
+temp.employednum <- employednum #temp?᭱?|?R??
+#employednum?R?W
+names(employednum)[2:length(employednum)] %<>%
+  paste0("PO.", .)
+
+#salary
+salary <- Employ %>%
+  select(-EmployedNum, RegularEarnings) %$%
+  spread(data = ., Industry, Salary)
+
+names(salary)[2:length(salary)] %<>%
+  paste0("S.", .)
+
+
+#RegularEarnings
+regularearnings <- Employ %>%
+  select(-c(Salary, EmployedNum)) %$%
+  spread(data = ., Industry, RegularEarnings)
+temp.regularearnings <- regularearnings
+
+names(regularearnings)[2:length(regularearnings)] %<>%
+  paste0("RE.", .)
+```
+
+
+---
+
+####2. Read Price
+```{r Read Function}
+#read function for price
+argv.fun <- function(v) {
+  v[,1] <- sapply(v[,1], function(x) {
+  x %<>% sub("M", "-", .) %<>% paste0(., "-01")})
+  v[,1] <- as.POSIXct(as.matrix(v[,1]), format = "%Y-%m-%d")
+  names(v)[1] <- "Date"
+  return(v)
+}
+```
+
+```{r Read Price}
+#???????ư??Ǧ~???��?105?~
+#???? (7 variables)
+price <- read.csv("price.csv", header = F, skip = 88, 
+                  na.strings = "-",
+                  nrows = 348, fileEncoding = "Big5")
+price <- argv.fun(price)
+colnames(price) <- c("Date", "??????", "?~????", "??????", "???q?γq?T??",
+                     "?????O????", "?оi?T????", "??????")
+
+#Tidy
+tidy.price <- price %>%
+  gather(., key = "Product", value = "CPI", 2:length(.)) %>%
+  arrange(Date)
+
+```
+
+---
+
+####3. Read Oil
+```{R Read Oil}
+#???o???? (2 variables)
+oil <- read_xlsx("oil_price.xlsx", skip = 119, n_max = 348, col_names = F)
+oil[, 2:3] <- round(x = oil[, 2:3], digits = 2)
+
+names(oil) <- c("Date", "WTI", "Brent")
+
+
+#Tidy
+tidy.oil <- oil %>%
+  gather(., key = "OilLocation", value = "OilPrice", 2:length(.)) %>%
+  arrange(Date)
+
+
+```
+
+---
+
+####4. Index
+```{r Read Index}
+#????????????
+index <- read.csv("Index.csv", header = F, skip = 88, nrow = 348,
+                  fileEncoding = "Big5")
+index <- argv.fun(index)
+names(index)[2] <- "EconIndex"
+```
+
+---
+
+####5. Industrial Productivity
+```{r Read Industrial Productivity }
+industrial.index <- industrial.index[-c(1:85, nrow(industrial.index)), ]
+industrial.index <- argv.fun(industrial.index)
+names(industrial.index)[2] <- 'IndustrialIndex'
+industrial.index$IndustrialIndex <- as.numeric(industrial.index$IndustrialIndex)
+# manufacturing <- read_xls("Manuproductivity.xls", skip = 97, n_max = 377, col_names = F)
+# manufacturing <- manufacturing[, 1:3]
+# manufacturing <- manufacturing[-seq(1, 365, 13),]
+# manufacturing$Date <- seq(from = as.POSIXct("1989-01-01", format = "%Y-%m-%d"),
+#     to = as.POSIXct("2017-12-01", format = "%Y-%m-%d"),
+#     by = "months")
+# manufacturing <- manufacturing[, -c(1,2)]
+# names(manufacturing)[1] <- "manufacturing.Prod"
+
+```
+
+---
+
+####6. Import
+```{r Import}
+import <- read_xlsx("import.xlsx", col_names = F, range = "A24:C387")
+import <- import[-seq(1, 352, 13),]
+import.2017 <- import[(nrow(import)-11):nrow(import), 3]
+names(import.2017) <- "X__2"
+new.import <- rbind(import[,2], import.2017)
+new.import$Date <- seq(from = as.POSIXct("1989-01-01", format = "%Y-%m-%d"),
+    to = as.POSIXct("2017-12-01", format = "%Y-%m-%d"),
+    by = "months")
+new.import$X__2 <- gsub(pattern = ",", replacement = "", x = new.import$X__2)
+new.import$X__2 <- as.numeric(new.import$X__2)
+names(new.import)[1] <- "Import"
+rm(import.2017)
+```
+
+---
+
+####7. Export
+```{r Export}
+export <- read_xlsx("export.xlsx", col_names = F, range = "A24:C387")
+export <- export[-seq(1, 352, 13),]
+export.2017 <- export[(nrow(export)-11):nrow(export), 3]
+names(export.2017) <- "X__2"
+new.export <- rbind(export[,2], export.2017)
+new.export$Date <- seq(from = as.POSIXct("1989-01-01", format = "%Y-%m-%d"),
+    to = as.POSIXct("2017-12-01", format = "%Y-%m-%d"),
+    by = "months")
+new.export$X__2 <- gsub(pattern = ",", replacement = "", x = new.export$X__2)
+new.export$X__2 <- as.numeric(new.export$X__2)
+names(new.export)[1] <- "Export"
+rm(export.2017)
+```
+
+---
+
+##Tidy Data Combine
+```{r Combine}
+#combine all variables, Employ, tidy.price, tidy.oil, index
+#1. Tidy price & Employ
+temp.1 <- Employ[rep(seq_len(nrow(Employ)), each = 14),]
+
+temp.2 <- tidy.price %>%
+  .[rep(seq_len(nrow(.)), each = 2),] %>%
+  group_by(Date) %>%
+  .[rep(seq_len(nrow(.)), times = 16),] %>%
+  arrange(Date) 
+
+temp.3 <- tidy.oil %>%
+  group_by(Date) %>%
+  .[rep(seq_len(nrow(.)), times = 16*7),] %>%
+  arrange(Date) 
+
+temp.4 <- index %>% 
+  .[rep(seq_len(nrow(.)), each = 16*7*2),]
+
+temp.5 <- company %>% 
+  .[rep(seq_len(nrow(.)), each = 16*7*2),]
+
+temp.6 <- industrial.index %>% 
+  .[rep(seq_len(nrow(.)), each = 16*7*2),]
+
+temp.7 <- new.import %>% 
+  .[rep(seq_len(nrow(.)), each = 16*7*2),]
+
+temp.8 <- new.export %>% 
+  .[rep(seq_len(nrow(.)), each = 16*7*2),]
+
+#Combine
+tidy.all <- bind_cols(list(temp.4, temp.5[, 2], temp.1[, -c(1, 4)], temp.2[,-1], temp.3[,-1],
+                           temp.6[, 2], temp.7[, 1], temp.8[, 1]))
+rm(list = paste0("temp.", 1:8))
+
+#?W?[Year, Month, Day
+tidy.all$Year <- as.numeric(substr(as.character(tidy.all$Date), 1, 4))
+tidy.all$Month <- as.numeric(substr(as.character(tidy.all$Date), 6, 7))
+
+
+#???s?~??
+# tidy.all %<>%
+#   subset(Date > as.POSIXct("1999-12-01", format = "%Y-%m-%d")) 
+
+
+#without log: tidy.file
+tidy.file <- tidy.all[, c(1, 14:15, 3, 2, 5, 6, 8, 10:13, 4, 7, 9)]
+
+#?u????Tidy File???o?ˡI?I?I?I?I?I?I?I?I?I?I?I
+tidy.file <- tidy.file[, -1]
+
+#after log: log.file
+log.file <- tidy.file
+log.file[, 3:11] <- log(tidy.file[, 3:11])
+
+names(log.file)[3:11] <- paste0('Log.', names(log.file)[3:11])
+
+#scale.log.file <- log.file
+```
+
+##Matrix
+```{r Matrix}
+dim(price)
+
+Matrix <- plyr::join_all(list(company[, 1:2], employednum, regularearnings, 
+                              price, index, industrial.index,
+                              new.import, new.export), by = "Date", type = "left")
+Matrix <- cbind(Matrix, oil[2:3])
+```
+
+
+#2. Exploration-Line Plot {.tabset}
+##Month
+```{r plot month}
+yearusage <- aggregate(ts(company$Date, start = c(1989, 1), frequency = 12),
+          FUN = mean, nfrequency = 1)
+
+ggplot(data = company, aes(x = Date, y = TotalUsage)) +
+  geom_line(color = "#00AFBB", size = 1) +
+  stat_smooth(
+  color = "#FC4E07", fill = "#FC4E07",
+  method = "loess"
+  ) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  scale_y_continuous(breaks = seq(2, 14, 2), labels = seq(2, 14, 2)) +
+  labs(y = "???~?ιq?q?]?Q???ס^", x = "????", title = "???~?ιq?q?Юɧǹ?")
+
+
+```
+
+```{r plot month 2010}
+#display.brewer.all(n = 10,type = "qual")
+ten.col <- brewer.pal(n = 10, "Paired")
+company %>%
+    filter(Date > as.POSIXct("2007-01-01", format = "%Y-%m-%d")) %>%
+  ggplot(data = ., aes(x = Date, y = TotalUsage)) +
+  geom_line(aes(color = season, group = 1), size = 1.2) +
+  scale_x_datetime(date_breaks = "1 years", date_labels= "%Y") +
+  labs(y = "???~?ιq?q?]?Q???ס^", x = "????", title = "???~?ιq?q?Юɧǹ?") +
+  scale_color_manual(labels = c("Q1", "Q2", "Q3", "Q4"),
+                     values = ten.col[c(2,3,6,7)],
+                     name = "?u")
+
+```
+
+##Boxplot
+```{r boxplot}
+# company %$%
+#   ts(TotalUsage, start = c(1989, 1), frequency = 12) -> ts.file
+# par(mar = c(6, 8, 5, 14), family = "LiGothicMed", cex.lab = 2,
+#     cex.axis = 1.8, cex.main = 3, mgp = c(3,1,0), xpd = TRUE)
+# boxplot(ts.file ~ cycle(ts.file), xlab = "Month", 
+#         ylab = "???~?ιq?q(?Q????)", col = ten.col[rep(1:4, each = 3)],
+#         main = "?C???ιq?q?в?Ž??", xlim = c(1, 12))
+# legend(9, 16, c("Q1", "Q2", "Q3", "Q4"), col = rainbow(4), lty = 1,
+#        xjust = 0, yjust = 2, lwd = 1, box.lty = 0)
+
+ggplot(company) +
+  geom_boxplot(aes(x = format(Date,"%m"), y = TotalUsage, 
+                   fill = season)) +
+  labs(y = "???~?ιq?q?]?Q???ס^", title = "?C???ιq?q?в?Ž??") +
+  scale_x_discrete("????",labels = unique(months(company$Date, abbreviate = F))) +
+  scale_fill_manual(name = "?u", labels = c("Q1", "Q2", "Q3", "Q4"), values = ten.col[c(2,3,6,7)])
+```
+
+##Plot Quarter
+##Predictor
+####1-1. Scale EmployedNum
+```{r EmployedNum}
+#plyr?y??group_by???D
+Employ %>%
+  group_by(., Industry) %>%
+  summarize(m = mean(EmployedNum)) %>%
+  arrange(desc(m))
+#Scale
+Scale.Employ <- Employ
+Scale.Employ %<>%
+  group_by(Industry) %<>%
+  mutate(., Scale.Num = scale(EmployedNum),
+         Scale.Salary = scale(Salary),
+         Scale.Earning = scale(RegularEarnings))
+#Scale company
+Scale.Company <- company[,c(1,2)]
+Scale.Company[,2] <- scale(Scale.Company[,2])
+
+Scale.Employ %>%
+  select(Date, Scale.Num, Scale.Salary, Industry) %$%
+  ggplot(data = ., aes(x = Date, y = Scale.Num)) +
+  geom_line(aes(color = Industry),
+            alpha = 0.5, position = position_dodge(0.8)) + 
+  geom_line(data = Scale.Company, aes(x = Date, y = TotalUsage), size = 1) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  labs(y = "?H??", x = "????", title = "?N?~?H?ơЮɧǹ?", subtitle = "?]?зǤơ^") +
+  scale_color_manual(values = tim.colors(16),
+                     name = "???~") +
+  theme(legend.key.width = unit(2, "line"))
+
+# geom_dl(aes(label = Industry),
+#           method = list(dl.combine("last.points"), 
+#                         cex = 0.8, fontfamily = "LiGothicMed")) +
+  
+```
+
+####1-2. Log EmployedNum
+```{r log EmployedNum}
+#Log
+Log.Employ <- Employ
+Log.Employ %<>%
+  group_by(Industry) %<>%
+  mutate(., Log.Num = scale(log(EmployedNum)),
+         Log.Salary = scale(log(Salary)),
+         Log.Earning = scale(log(RegularEarnings)))
+#Log company
+Log.Company <- company[,c(1,2)]
+Log.Company[,2] <- scale(log(Log.Company[,2]))
+
+Log.Employ %>%
+  select(Date, Log.Num, Log.Salary, Industry) %$%
+  ggplot(data = ., aes(x = Date, y = Log.Num)) +
+  geom_line(aes(color = Industry),
+            alpha = 0.5, position = position_dodge(0.8)) + 
+  geom_line(data = Log.Company, aes(x = Date, y = TotalUsage), size = 1) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  labs(y = "?H??", x = "????", title = "?N?~?H?ơЮɧǹ?", subtitle = "?]?????ơ^") +
+  scale_color_manual(values = tim.colors(16),
+                     name = "???~") +
+  theme(legend.key.width = unit(2, "line"))
+```
+
+####1-3. Corrplot EmployedNum
+```{r Corrplot EmployedNum}
+par(family = "?L?n??????")
+company %>%
+  select(TotalUsage) %$%
+  cbind(temp.employednum, .) %$%
+  corrplot::corrplot(cor(scale(log(.[, -1]))), tl.cex = 0.7, addCoef.col="grey",
+                     hclust.method = "average", order = "hclust", cl.cex = 0.3) 
+```
+
+####1-4. EmployedNum(Delete)
+```{r Delete EmployedNum}
+#Were not deleted
+set.seed(100)
+Log.Employ %>%
+  select(Date, Log.Num, Log.Salary, Industry) %>%
+  filter(!(Industry %in% c('?s?y', '???ʲ?', '???L?A??', '???y',
+                         '?q?O?οU??', '?B?????x', '?Τ??ΦìV???v'))) %$%
+  ggplot(data = ., aes(x = Date, y = Log.Num)) +
+  geom_line(aes(color = Industry),
+            alpha = 0.7, position = position_dodge(0.8), size = 0.8) + 
+  geom_line(data = Log.Company, aes(x = Date, y = TotalUsage), size = 1) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  labs(y = "?H??", x = "????", title = "?N?~?H?ơЮɧǹ?", subtitle = "?]?????ơ^") +
+  scale_color_manual(values = tim.colors(30)[sample(30,9)],
+                     name = "???~") +
+  theme(legend.key.width = unit(2, "line"))
+
+
+#Were deleted
+set.seed(100)
+Log.Employ %>%
+  select(Date, Log.Num, Log.Salary, Industry) %>%
+  filter(Industry %in% c('?s?y', '???ʲ?', '???L?A??', '???y',
+                         '?q?O?οU??', '?B?????x', '?Τ??ΦìV???v')) %$%
+  ggplot(data = ., aes(x = Date, y = Log.Num)) +
+  geom_line(aes(color = Industry),
+            alpha = 0.7, position = position_dodge(0.8), size = 0.8) + 
+  geom_line(data = Log.Company, aes(x = Date, y = TotalUsage), size = 1) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  labs(y = "?H??", x = "????", title = "?N?~?H?ơЮɧǹ?", subtitle = "?]?????ơ^") +
+  scale_color_manual(values = tim.colors(30)[sample(30,9)],
+                     name = "???~") +
+  theme(legend.key.width = unit(2, "line"))
+```
+
+
+---
+
+####2-1. Scale RegularEarnings
+```{r RegularEarnings}
+Scale.Employ %>%
+  select(Date, Scale.Num, Scale.Earning, Industry) %$%
+  ggplot(data = ., aes(x = Date, y = Scale.Earning)) +
+  geom_line(aes(color = Industry),
+            alpha = 0.6, position = position_dodge(0.8)) +
+  geom_line(data = Scale.Company, aes(x = Date, y = TotalUsage), size = 1) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  labs(y = "?~???]?s?x???^", x = "????", title = "?g?`???~???Юɧǹ?", subtitle = "?]?зǤơ^") +
+  scale_color_manual(values = tim.colors(16),
+                     name = "???~") +
+  theme(legend.key.width = unit(2, "line"))
+```
+
+####2-2. Log RegularEarnings
+```{r log RegularEarnings}
+Log.Employ %>%
+  select(Date, Log.Num, Log.Earning, Industry) %$%
+  ggplot(data = ., aes(x = Date, y = Log.Earning)) +
+  geom_line(aes(color = Industry),
+            alpha = 0.6, position = position_dodge(0.8)) +
+  geom_line(data = Log.Company, aes(x = Date, y = TotalUsage), size = 1) +
+  scale_x_datetime(date_breaks = "5 years", date_labels= "%Y") +
+  labs(y = "?~???]?s?x???^", x = "????", title = "?g?`???~???Юɧǹ?", subtitle = "?]?????ơ^") +
+  scale_color_manual(values = tim.colors(16),
+                     name = "???~") +
+  theme(legend.key.width = unit(2, "line"))
+```
+
+####2-3. Corrplot RegularEarnings
+```{r Corrplot RegularEarnings}
+par(family = "?L?n??????")
+company %>%
+  select(TotalUsage) %$%
+  cbind(temp.regularearnings, .) %$%
+  corrplot::corrplot(cor(scale(log(.[, -1]))), tl.cex = 0.8, addCoef.col="grey",
+                     hclust.method = "average", order = "hclust", cl.cex = 0.3) 
+```
+
+####2-4. RegularEarnings(Delete)
+```{r Delete RegularEarnings}
+#Were not deleted
+set.seed(100)
+Log.Employ %>%
+  select(Date, Log.Num, Log.Earning, Industry) %>%
+  filter(!(Industry %in% c('???ʲ?', '?Τ??ΦìV???v', "?䴩?A??"))) %$%
+  ggplot(data = ., aes(x = Date, y = Log.Earning)) +
+  geom_line(aes(color = Industry),
+            alpha = 0.7, position = position_dodge(0.8), size = 0.8) + 
+  geom_line(data = Log.Company, aes(x = Date, y = TotalUsage), size = 1) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  labs(y = "?H??", x = "????", title = "?g?`???~???Юɧǹ?", subtitle = "?]?????ơ^") +
+  scale_color_manual(values = tim.colors(30)[sample(30, 13)],
+                     name = "???~") +
+  theme(legend.key.width = unit(2, "line"))
+
+
+#Were deleted
+set.seed(100)
+Log.Employ %>%
+  select(Date, Log.Num, Log.Earning, Industry) %>%
+  filter(Industry %in% c('???ʲ?', '?Τ??ΦìV???v', "?䴩?A??")) %$%
+  ggplot(data = ., aes(x = Date, y = Log.Earning)) +
+  geom_line(aes(color = Industry),
+            alpha = 0.7, position = position_dodge(0.8), size = 0.8) + 
+  geom_line(data = Log.Company, aes(x = Date, y = TotalUsage), size = 1) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  labs(y = "?H??", x = "????", title = "?g?`???~???Юɧǹ?", subtitle = "?]?????ơ^") +
+  scale_color_manual(values = tim.colors(30)[sample(30, 3)],
+                     name = "???~") +
+  theme(legend.key.width = unit(2, "line"))
+```
+
+---
+
+####3. Salary
+```{r Salary}
+Scale.Employ %>%
+  select(Date, Scale.Num, Scale.Salary, Industry) %$%
+  ggplot(data = ., aes(x = Date, y = Scale.Salary)) +
+  geom_line(aes(color = Industry),
+            alpha = 0.3, position = position_dodge(0.8)) +
+  geom_line(data = Scale.Company, aes(x = Date, y = TotalUsage), size = 1) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  labs(y = "?~???]?s?x???^", x = "????", title = "?C?H?C???~???Юɧǹ?", subtitle = "?]?зǤơ^") +
+  scale_color_manual(values = tim.colors(16),
+                     name = "???~") +
+  theme(legend.key.width = unit(2, "line"))
+```
+
+```{r log Salary}
+Log.Employ %>%
+  select(Date, Log.Num, Log.Salary, Industry) %$%
+  ggplot(data = ., aes(x = Date, y = Log.Salary)) +
+  geom_line(aes(color = Industry),
+            alpha = 0.5, position = position_dodge(0.8)) +
+  geom_line(data = Log.Company, aes(x = Date, y = TotalUsage), size = 1) +
+  scale_x_datetime(date_breaks = "5 years", date_labels= "%Y") +
+  labs(y = "?~???]?s?x???^", x = "????", title = "?C?H?C???~???Юɧǹ?", subtitle = "?]?????ơ^") +
+  scale_color_manual(values = tim.colors(16),
+                     name = "???~") +
+  theme(legend.key.width = unit(2, "line"))
+```
+
+---
+####4-1. Price
+```{r Price}
+set.seed(100)
+Scale.price <- tidy.price
+Scale.price[,3] <- scale(tidy.price[,3])
+Scale.price %>%
+  select(Date, CPI, Product) %$%
+  ggplot(data = ., aes(x = Date, y = CPI)) +
+  geom_line(aes(color = Product),
+            alpha = 0.8, position = position_dodge(0.8), size = 0.8) +
+  geom_line(data = Scale.Company, aes(x = Date, y = TotalUsage), size = 1) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  labs(y = "???ȫ???", x = "????", title = "???????ơЮɧǹ?", subtitle = "?]?зǤơ^") +
+  scale_color_manual(values = tim.colors(30)[sample(30,7)], name = "????") +
+  theme(legend.key.width = unit(2, "line"))
+```
+
+```{r log Price}
+set.seed(100)
+Log.price <- tidy.price
+Log.price[,3] <- scale(log(tidy.price[,3]))
+Log.price %>%
+  select(Date, CPI, Product) %$%
+  ggplot(data = ., aes(x = Date, y = CPI)) +
+  geom_line(aes(color = Product), 
+                alpha = 0.7, position = position_dodge(0.8)) +
+  geom_line(data = Log.Company, aes(x = Date, y = TotalUsage), size = 1) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  labs(y = "???ȫ???", x = "????", title = "???????ơЮɧǹ?", subtitle = "?]?????ơ^") +
+  scale_color_manual(values = tim.colors(30)[sample(30,7)],
+                     name = "????") +
+  theme(legend.key.width = unit(2, "line"))
+```
+
+####4-2. Corrplot Price
+```{r Price Corr}
+library(corrplot)
+par(family = "?L?n??????")
+company %>%
+  select(TotalUsage) %$%
+  cbind(price, .) %$%
+  corrplot::corrplot(cor(log(.[, -1])), addCoef.col="grey") 
+```
+
+####4-3. Price(Delete)
+```{r Price Delete}
+#Price categories were deleted
+set.seed(100)
+Log.price <- tidy.price
+Log.price[,3] <- scale(log(tidy.price[,3]))
+Log.price %>%
+  .[.$Product %in% c("?~????", "??????", "???q?γq?T??", "?оi?T????"),] %>%
+  select(Date, Product, CPI) %$%
+  ggplot(data = ., aes(x = Date, y = CPI)) +
+  geom_line(aes(color = Product),
+            alpha = 1, position = position_dodge(0.8), size = 0.8) +
+  geom_line(data = Scale.Company, aes(x = Date, y = TotalUsage), size = 1, alpha = 0.8) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  labs(y = "???ȫ???", x = "????", title = "???????ơЮɧǹ?", subtitle = "?]?зǤơ^") +
+  scale_color_manual(values = tim.colors(30)[sample(30,7)[c(1,2,3,5)]], name = "????") +
+  theme(legend.key.width = unit(2, "line"))
+
+
+#Price categories were not deleted
+
+set.seed(100)
+Log.price <- tidy.price
+Log.price[,3] <- scale(log(tidy.price[,3]))
+Log.price %>%
+  .[!(.$Product %in% c("?~????", "??????", "???q?γq?T??", "?оi?T????")),] %>%
+  select(Date, Product, CPI) %$%
+  ggplot(data = ., aes(x = Date, y = CPI)) +
+  geom_line(aes(color = Product),
+            alpha = 1, position = position_dodge(0.8), size = 0.8) +
+  geom_line(data = Scale.Company, aes(x = Date, y = TotalUsage), size = 1, alpha = 0.8) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  labs(y = "???ȫ???", x = "????", title = "???????ơЮɧǹ?", subtitle = "?]?зǤơ^") +
+  scale_color_manual(values = tim.colors(30)[sample(30,7)[c(4,6,7)]], name = "????") +
+  theme(legend.key.width = unit(2, "line"))
+
+```
+
+---
+
+####5. Oil
+```{r Oil}
+Scale.oil <- tidy.oil
+Scale.oil[,3] <- scale(tidy.oil[,3])
+Scale.oil %>%
+  select(Date, OilPrice) %$%
+  ggplot(data = ., aes(x = Date, y = OilPrice)) +
+  geom_line(aes(color = Scale.oil$OilLocation),
+            alpha = 0.8, position = position_dodge(0.8), size = 1) +
+  geom_line(data = Scale.Company, aes(x = Date, y = TotalUsage), size = 0.8, alpha = 0.8) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  labs(y = "????", x = "????", title = "???o?????Юɧǹ?", subtitle = "?]?зǤơ^") +
+  scale_color_manual(values = rainbow(2),
+                     name = "????") +
+  theme(legend.key.width = unit(2, "line"))
+```
+
+```{r log Oil}
+Log.oil <- Scale.oil
+Log.oil[,3] <- scale(log(tidy.oil[,3]))
+Log.oil %>%
+  select(Date, OilPrice) %$%
+  ggplot(data = ., aes(x = Date, y = OilPrice)) +
+  geom_line(aes(color = Log.oil$OilLocation),
+            alpha = 0.8, position = position_dodge(0.8), size = 1) +
+  geom_line(data = Log.Company, aes(x = Date, y = TotalUsage), size = 0.8, alpha = 0.8) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  labs(y = "????", x = "????", title = "???o?????Юɧǹ?", subtitle = "?]?????ơ^") +
+  scale_color_manual(values = rainbow(2),
+                     name = "????") +
+  theme(legend.key.width = unit(2, "line"))
+```
+
+---
+
+####6. Index
+```{r Index}
+Scale.index <- index
+Scale.index[,2] <- scale(index[,2])
+Scale.index %>%
+  ggplot(data = ., aes(x = Date, y = EconIndex)) +
+  geom_line(aes(color = rainbow(2)[1]), size = 1.5) +
+  geom_line(data = Scale.Company, aes(x = Date, y = TotalUsage, color = "black"), size = 0.8) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  scale_color_manual(name = "", values = c(rainbow(2)[1], "black"), 
+                     labels = c("????????????", "???~?`?ιq?q")) +
+  labs(y = "???ȫ???", x = "????", title = "???????????СЮɧǹ?", subtitle = "?]?зǤơ^") +
+  theme(legend.key.width = unit(2, "line"))
+
+```
+
+```{r log Index}
+Log.index <- index
+Log.index[,2] <- scale(log(index[,2]))
+Log.index %>%
+  ggplot(data = ., aes(x = Date, y = EconIndex)) +
+  geom_line(aes(color = rainbow(2)[1]), size = 1.5) +
+  geom_line(data = Log.Company, aes(x = Date, y = TotalUsage, color = "black"), size = 0.8) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  scale_color_manual(name = "", values = c(rainbow(2)[1], "black"), 
+                     labels = c("????????????", "???~?`?ιq?q")) +
+  labs(y = "????????????", x = "????", title = "???????????СЮɧǹ?", subtitle = "?]?????ơ^") +
+  theme(legend.key.width = unit(2, "line"))
+
+```
+
+---
+
+####7. IndustrialIndex
+```{r Scale industrialindex}
+Scale.industrial.index <- industrial.index
+Scale.industrial.index[,2] <- scale(industrial.index[,2])
+Scale.industrial.index %>%
+  select(Date, IndustrialIndex) %$%
+  ggplot(data = ., aes(x = Date, y = IndustrialIndex)) +
+  geom_line(aes(color = ten.col[4]),
+            alpha = 1, position = position_dodge(0.8), size = 1.3) +
+  geom_line(data = Scale.Company, aes(x = Date, y = TotalUsage, color = "black"),
+            size = 0.8, alpha = 0.8) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  labs(y = "???ȫ???", x = "????", title = "?u?~?Ͳ????ơЮɧǹ?", subtitle = "?]?зǤơ^") +
+  scale_color_manual(name = "", values = c(ten.col[4], "black"), 
+                     labels = c("?u?~?Ͳ?????", "???~?`?ιq?q")) +
+  theme(legend.key.width = unit(2, "line"))
+```
+
+```{r log industrialindex}
+Log.industrial.index <- industrial.index
+Log.industrial.index[, 2] <- scale(log(industrial.index[, 2]))
+Log.industrial.index %>%
+  select(Date, IndustrialIndex) %$%
+  ggplot(data = ., aes(x = Date, y = IndustrialIndex)) +
+  geom_line(aes(color = ten.col[4]),
+            alpha = 1, position = position_dodge(0.8), size = 1.3) +
+  geom_line(data = Log.Company, aes(x = Date, y = TotalUsage, color = "black"),
+            size = 0.8, alpha = 0.8) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  labs(y = "???ȫ???", x = "????", title = "?u?~?Ͳ????ơЮɧǹ?", subtitle = "?]?????ơ^") +
+  scale_color_manual(name = "", values = c(ten.col[4], "black"), 
+                     labels = c("?u?~?Ͳ?????", "???~?`?ιq?q")) +
+  theme(legend.key.width = unit(2, "line"))
+```
+
+---
+
+####8. Import / Export
+```{r Scale Import&Export}
+Scale.new.import <- new.import
+Scale.new.import[,1] <- scale(new.import[,1])
+Scale.new.export <- new.export
+Scale.new.export[,1] <- scale(new.export[,1])
+Scale.new.import %>%
+  select(Date, Import) %$%
+  ggplot(data = ., aes(x = Date, y = Import)) +
+  geom_line(aes(color = ten.col[2]),
+            alpha = 0.9, position = position_dodge(0.8), size = 1.3) +
+  geom_line(data = Scale.new.export, aes(x = Date, y = Export, color = ten.col[8]),
+            alpha = 0.9, position = position_dodge(0.8), size = 1.3) +
+  geom_line(data = Scale.Company, aes(x = Date, y = TotalUsage, color = "black"),
+            size = 0.8, alpha = 0.8, position = position_dodge(0.8)) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  labs(y = "?????]?ʸU?????^", x = "????", title = "?i?X?f?`?ȡЮɧǹ?", subtitle = "?]?зǤơ^") +
+  scale_color_manual(name = "", values = c(ten.col[2], ten.col[8], "black"), 
+                     labels = c("?i?f?`??", "?X?f?`??", "???~?`?ιq?q")) +
+  theme(legend.key.width = unit(2, "line"))
+```
+
+```{r Log Import&Export}
+Log.new.import <- new.import
+Log.new.import[,1] <- scale(log(new.import[,1]))
+Log.new.export <- new.export
+Log.new.export[,1] <- scale(log(new.export[,1]))
+Log.new.import %>%
+  select(Date, Import) %$%
+  ggplot(data = ., aes(x = Date, y = Import)) +
+  geom_line(aes(color = ten.col[2]),
+            alpha = 0.9, position = position_dodge(0.8), size = 1.3) +
+  geom_line(data = Log.new.export, aes(x = Date, y = Export, color = ten.col[8]),
+            alpha = 0.9, position = position_dodge(0.8), size = 1.3) +
+  geom_line(data = Log.Company, aes(x = Date, y = TotalUsage, color = "black"),
+            size = 0.8, alpha = 0.8, position = position_dodge(0.8)) +
+  scale_x_datetime(date_breaks = "3 years", date_labels= "%Y") +
+  labs(y = "?????]?ʸU?????^", x = "????", title = "?i?X?f?`?ȡЮɧǹ?", subtitle = "?]?????ơ^") +
+  scale_color_manual(name = "", values = c(ten.col[2], ten.col[8], "black"), 
+                     labels = c("?i?f?`??", "?X?f?`??", "???~?`?ιq?q")) +
+  theme(legend.key.width = unit(2, "line"))
+```
+
+---
+
+#3. Feature Selection {.tabset}
+```{r Feature Selection}
+log.file %<>%
+  filter(!(Industry %in% c('?s?y', '???ʲ?', '???L?A??', '???y', '?q?O?οU??',
+                         '?B?????x', '?Τ??ΦìV???v', '?䴩?A??')), 
+         !(Product %in% c("?~????", "??????", "???q?γq?T??", "?оi?T????")),
+         OilLocation == "WTI")
+```
+
+##lag1
+```{r}
+#?@??
+#PCA
+log.file %<>% subset(Year > 1997)
+in.sample <- log.file %>% subset(Year > 1997 & Year < 2016)
+log.file %>%
+  subset(!(Year == 1998 & Month == 1)) %>%
+  .[-c((nrow(.) - 23*24+1):nrow(.)),] %>%
+  dplyr::select(Log.TotalUsage) %>%
+  cbind(., in.sample$Log.TotalUsage, pca) -> dr.pca.1
+names(dr.pca.1)[1:2] <- c("LogTotalUsage", "Lag1.Usage")
+
+#SIR
+log.file %>%
+  subset(!(Year == 1998 & Month == 1)) %>%
+  .[-c((nrow(.) - 23*24+1):nrow(.)),] %>%
+  dplyr::select(Log.TotalUsage) %>%
+  cbind(., in.sample$Log.TotalUsage, sir) -> dr.sir.1
+names(dr.sir.1)[1:2] <- c("LogTotalUsage", "Lag1.Usage")
+
+#ISOMAP
+log.file %>%
+  subset(!(Year == 1998 & Month == 1)) %>%
+  .[-c((nrow(.) - 23*24+1):nrow(.)),] %>%
+  dplyr::select(Log.TotalUsage) %>%
+  cbind(., in.sample$Log.TotalUsage, iso) -> dr.iso.1
+names(dr.iso.1)[1:2] <- c("LogTotalUsage", "Lag1.Usage")
+
+#Raw
+log.file %>%
+  subset(!(Year == 1998 & Month == 1)) %>%
+  .[-c((nrow(.) - 23*24+1):nrow(.)),] %>%
+  dplyr::select(Log.TotalUsage) %>%
+  cbind(., in.sample$Log.TotalUsage, in.sample[,c(1:2,4:11)]) -> raw.1
+names(raw.1)[1:2] <- c("LogTotalUsage", "Lag1.Usage")
+```
+
+##lag2
+```{r}
+#?G??
+#PCA
+log.file %>%
+  subset(!(Year == 1998 & Month == 1)) %>%
+  .[-c((nrow(.) - 23*24+1):nrow(.)),] %>%
+  dplyr::select(Log.TotalUsage) -> Lag1.Usage
+log.file %>%
+  subset(!(Year == 1998 & Month %in% c(1,2))) %>%
+  .[-c((nrow(.) - 22*24+1):nrow(.)),] %>% 
+  dplyr::select(Log.TotalUsage) -> LogTotalUsage
+cbind(LogTotalUsage, Lag1.Usage, in.sample$Log.TotalUsage, pca) -> dr.pca.2
+names(dr.pca.2)[1:3] <- c("LogTotalUsage", "Lag1.Usage", "Lag2.Usage")
+
+#SIR
+log.file %>%
+  subset(!(Year == 1998 & Month == 1)) %>%
+  .[-c((nrow(.) - 23*24+1):nrow(.)),] %>%
+  dplyr::select(Log.TotalUsage) -> Lag1.Usage
+log.file %>%
+  subset(!(Year == 1998 & Month %in% c(1,2))) %>%
+  .[-c((nrow(.) - 22*24+1):nrow(.)),] %>% 
+  dplyr::select(Log.TotalUsage) -> LogTotalUsage
+cbind(LogTotalUsage, Lag1.Usage, in.sample$Log.TotalUsage, sir) -> dr.sir.2
+names(dr.sir.2)[1:3] <- c("LogTotalUsage", "Lag1.Usage", "Lag2.Usage")
+
+#ISOMAP
+log.file %>%
+  subset(!(Year == 1998 & Month == 1)) %>%
+  .[-c((nrow(.) - 23*24+1):nrow(.)),] %>%
+  dplyr::select(Log.TotalUsage) -> Lag1.Usage
+log.file %>%
+  subset(!(Year == 1998 & Month %in% c(1,2))) %>%
+  .[-c((nrow(.) - 22*24+1):nrow(.)),] %>% 
+  dplyr::select(Log.TotalUsage) -> LogTotalUsage
+cbind(LogTotalUsage, Lag1.Usage, in.sample$Log.TotalUsage, iso) -> dr.iso.2
+names(dr.iso.2)[1:3] <- c("LogTotalUsage", "Lag1.Usage", "Lag2.Usage")
+
+#Raw 2
+log.file %>%
+  subset(!(Year == 1998 & Month == 1)) %>%
+  .[-c((nrow(.) - 23*24+1):nrow(.)),] %>%
+  dplyr::select(Log.TotalUsage) -> Lag1.Usage
+log.file %>%
+  subset(!(Year == 1998 & Month %in% c(1,2))) %>%
+  .[-c((nrow(.) - 22*24+1):nrow(.)),] %>% 
+  dplyr::select(Log.TotalUsage) -> LogTotalUsage
+cbind(LogTotalUsage, Lag1.Usage, in.sample$Log.TotalUsage, in.sample[,c(1:2,4:11)]) -> raw.2
+names(raw.2)[1:3] <- c("LogTotalUsage", "Lag1.Usage", "Lag2.Usage")
+```
+
+##lag3
+```{r}
+#SIR
+log.file %>%
+  subset(!(Year == 1998 & Month == 1)) %>%
+  .[-c((nrow(.) - 23*24+1):nrow(.)),] %>%
+  dplyr::select(Log.TotalUsage) -> Lag2.Usage
+log.file %>%
+  subset(!(Year == 1998 & Month %in% c(1,2))) %>%
+  .[-c((nrow(.) - 22*24+1):nrow(.)),] %>% 
+  dplyr::select(Log.TotalUsage) -> Lag1.Usage
+log.file %>%
+  subset(!(Year == 1998 & Month %in% c(1,2,3))) %>%
+  .[-c((nrow(.) - 21*24+1):nrow(.)),] %>% 
+  dplyr::select(Log.TotalUsage) -> LogTotalUsage
+cbind(LogTotalUsage, Lag1.Usage, Lag2.Usage, in.sample$Log.TotalUsage, sir) -> dr.sir.3
+names(dr.sir.3)[1:4] <- c("LogTotalUsage", "Lag1.Usage", "Lag2.Usage", "Lag3.Usage")
+
+#ISOMAP
+log.file %>%
+  subset(!(Year == 1998 & Month == 1)) %>%
+  .[-c((nrow(.) - 23*24+1):nrow(.)),] %>%
+  dplyr::select(Log.TotalUsage) -> Lag2.Usage
+log.file %>%
+  subset(!(Year == 1998 & Month %in% c(1,2))) %>%
+  .[-c((nrow(.) - 22*24+1):nrow(.)),] %>% 
+  dplyr::select(Log.TotalUsage) -> Lag1.Usage
+log.file %>%
+  subset(!(Year == 1998 & Month %in% c(1,2,3))) %>%
+  .[-c((nrow(.) - 21*24+1):nrow(.)),] %>% 
+  dplyr::select(Log.TotalUsage) -> LogTotalUsage
+cbind(LogTotalUsage, Lag1.Usage, Lag2.Usage, in.sample$Log.TotalUsage, iso) -> dr.iso.3
+names(dr.iso.3)[1:4] <- c("LogTotalUsage", "Lag1.Usage", "Lag2.Usage", "Lag3.Usage")
+
+#Raw
+log.file %>%
+  subset(!(Year == 1998 & Month == 1)) %>%
+  .[-c((nrow(.) - 23*24+1):nrow(.)),] %>%
+  dplyr::select(Log.TotalUsage) -> Lag2.Usage
+log.file %>%
+  subset(!(Year == 1998 & Month %in% c(1,2))) %>%
+  .[-c((nrow(.) - 22*24+1):nrow(.)),] %>% 
+  dplyr::select(Log.TotalUsage) -> Lag1.Usage
+log.file %>%
+  subset(!(Year == 1998 & Month %in% c(1,2,3))) %>%
+  .[-c((nrow(.) - 21*24+1):nrow(.)),] %>% 
+  dplyr::select(Log.TotalUsage) -> LogTotalUsage
+cbind(LogTotalUsage, Lag1.Usage, Lag2.Usage, in.sample$Log.TotalUsage, in.sample[,c(1:2,4:11)]) -> raw.3
+names(raw.3)[1:4] <- c("LogTotalUsage", "Lag1.Usage", "Lag2.Usage", "Lag3.Usage")
+```
+
+
+---
+
+#4. Exploration-Heatmap {.tabset}
+##Heatmap
+```{r heatmap}
+#package
+#library(devtools)
+#install_github("jokergoo/ComplexHeatmap")
+#source("https://bioconductor.org/biocLite.R")
+#biocLite("ComplexHeatmap")
+#colors
+rb <- tim.colors(101)
+#scale to 01 function
+scale_to_01 <- function(x){
+  x.01 <- (x - min(x))/(max(x)-min(x))
+}
+v_yx <- Matrix[,-1]
+row.names(v_yx) <- Matrix[, 1]
+v_yx[(nrow(v_yx)+1),] <- c("Usage", rep("Population", 16),
+              rep("Salary", 16), rep("Price", 7), "EconIndex",
+              "IndustrialIndex", "Import", "Export", rep("oil", 2))
+##???m?A?????^numeric
+v_yx <- data.frame(t(v_yx), check.names = F, stringsAsFactors = F)
+v_yx[,-length(v_yx)] <- as.data.frame(sapply(v_yx[,-length(v_yx)], as.numeric))
+##scale
+v_yx[,-length(v_yx)] <- t(scale(t(v_yx[,-length(v_yx)])))
+#time label
+time <- rep("", times = length(v_yx) - 1)
+time[seq(1, length(v_yx) - 1, 12)] <-
+  sapply(as.character(colnames(v_yx)[seq(1,length(v_yx) - 1, 12)]),
+      function(x) {substr(x, 1, 7)})
+time_col <- HeatmapAnnotation(text = 
+          anno_text(time, rot = 90, offset = unit(5, "mm"),
+          just = "right", gp = gpar(fontsize = 15)))
+#scale only
+cgroup <- data.frame(group = v_yx[,length(v_yx)])
+colr <- rainbow(9)
+names(colr) <- c("Usage", "Population", "Salary", "Price", "EconIndex",
+              "IndustrialIndex", "Import", "Export", "oil")
+c0 <- Heatmap(v_yx[,-length(v_yx)], name = "heat" , col = rb, 
+        cluster_rows = F, cluster_columns = F,
+        column_title = "Times", column_title_side = "bottom",
+        row_title_side = "right", show_row_names = T, show_column_names = F,
+        heatmap_legend_param = list(title = "Heat",title_gp = gpar(fontsize = 15,
+        fontface = "bold"), color_bar = "continuous", 
+        legend_direction = "horizontal"),
+        bottom_annotation = time_col) +
+  HeatmapAnnotation(df = cgroup, col = list(group = colr), which = "row",
+        show_annotation_name = T, annotation_name_rot = 90,
+        annotation_legend_param = gpar(fontsize = 30, fontface = "bold"))
+#scale to 01
+v_yx01 <- apply(v_yx[,-length(v_yx)], 1, scale_to_01)
+cgroup <- data.frame(group = v_yx[,length(v_yx)])
+colr <- rainbow(6)
+names(colr) <- c("usage", "population", "salary", "price", "index", "oil")
+c1 <- HeatmapAnnotation(df = cgroup, col = list(group = colr), which = "row",
+        show_annotation_name = T,  annotation_name_rot = 90) +
+  Heatmap(t(v_yx01), col = rb, row_names_side =  "right",
+        cluster_rows = F, cluster_columns = F, column_title = "Times", 
+        column_title_side = "bottom", row_title = "variables",
+        heatmap_legend_param = list(title = "heat",title_gp = gpar(fontsize = 10,
+        fontface = "bold"), color_bar = "continuous"),
+        row_title_side = "right", show_column_names = F, show_row_names = T,
+        bottom_annotation = time_col)
+```
+
+##Clustering 
+```{r clustering}
+#DTW?��s?Adist by row?Ascale by column
+c_dtw <- hclust(dist(v_yx[,-length(v_yx)], 
+                     method = "DTW"), method = "average")
+#3??
+cluster_3 <- cutree(c_dtw, k = 3)
+v_yx3 <- v_yx[names(sort(cluster_3)),]
+v_yx3[,-length(v_yx)] <- t(apply(v_yx3[,-length(v_yx)], 1, scale_to_01))
+cgroup <- data.frame(group = v_yx3[,length(v_yx3)], 
+                     cluster = as.factor(sort(cluster_3)))
+colr <- rainbow(9)
+names(colr) <- c("usage", "population", "salary", "price", "index",
+                 "oil", as.character(1:3))
+time_col <- HeatmapAnnotation(cn = function(index) {
+    grid.text(sapply(as.character(colnames(v_yx)[seq(1,length(v_yx) - 1, 24)]),
+      function(x) {substr(x, 1, 4)}), seq(1,length(v_yx) - 1, 24)/length(v_yx),
+      1, just = c("center", "top"))})
+c3 <- HeatmapAnnotation(df = cgroup, col = list(group = colr), which = "row",
+        show_annotation_name = T,  annotation_name_rot = 90) +
+  Heatmap(v_yx3[,-length(v_yx3)], name = "cluster_3" , col = rb, 
+        cluster_rows = F, cluster_columns = F, column_title = "Time", 
+        column_title_side = "bottom", row_title = "variables",
+        row_title_side = "right", show_column_names = F, show_row_names = T,
+        bottom_annotation = time_col)
+#6??
+cluster_6 <- cutree(c_dtw, k = 6)
+v_yx6 <- v_yx[names(sort(cluster_6)),]
+v_yx6[,-length(v_yx)] <- t(apply(v_yx6[,-length(v_yx)], 1, scale_to_01))
+cgroup <- data.frame(group = v_yx6[,length(v_yx6)], 
+                     cluster = as.factor(sort(cluster_6)))
+colr <- rainbow(12)
+names(colr) <- c("usage", "population", "salary", "price", "index",
+                 "oil", as.character(1:6))
+c6 <- HeatmapAnnotation(df = cgroup, col = list(group = colr), which = "row",
+        show_annotation_name = T,  annotation_name_rot = 90) +
+  Heatmap(v_yx6[,-length(v_yx6)], name = "cluster_6" , col = rb, 
+        cluster_rows = F, cluster_columns = F, column_title = "Time", 
+        column_title_side = "bottom", row_title = "variables",
+        row_title_side = "right", show_column_names = F, show_row_names = T,
+        bottom_annotation = time_col)
+#9??
+cluster_9 <- cutree(c_dtw, k = 9)
+v_yx9 <- v_yx[names(sort(cluster_9)),]
+v_yx9[,-length(v_yx)] <- t(apply(v_yx9[,-length(v_yx)], 1, scale_to_01))
+cgroup <- data.frame(group = v_yx9[,length(v_yx9)], 
+                     cluster = as.factor(sort(cluster_9)))
+colr <- rainbow(15)
+names(colr) <- c("usage", "population", "salary", "price", "index",
+                 "oil", as.character(1:9))
+c9 <- HeatmapAnnotation(df = cgroup, col = list(group = colr), which = "row",
+        show_annotation_name = T,  annotation_name_rot = 90) +
+  Heatmap(v_yx9[,-length(v_yx9)], name = "cluster_9" , col = rb, 
+        cluster_rows = F, cluster_columns = F, column_title = "Time", 
+        column_title_side = "bottom", row_title = "variables",
+        row_title_side = "right", show_column_names = F, show_row_names = T,
+        bottom_annotation = time_col)
+#15??
+cluster_15 <- cutree(c_dtw, k = 15)
+v_yx15 <- v_yx[names(sort(cluster_15)),]
+v_yx15[,-length(v_yx)] <- t(apply(v_yx6[,-length(v_yx)], 1, scale_to_01))
+cgroup <- data.frame(group = v_yx15[,length(v_yx15)], 
+                     cluster = as.factor(sort(cluster_15)))
+colr <- rainbow(21)
+names(colr) <- c("usage", "population", "salary", "price", "index",
+                 "oil", as.character(1:15))
+c15 <- HeatmapAnnotation(df = cgroup, col = list(cgroup = colr), which = "row",
+        show_annotation_name = T,  annotation_name_rot = 90) +
+  Heatmap(v_yx15[,-length(v_yx15)], name = "cluster_15" , col = rb, 
+        cluster_rows = F, cluster_columns = F, column_title = "Time", 
+        column_title_side = "bottom", row_title = "variables",
+        row_title_side = "right", show_column_names = F, show_row_names = T,
+        bottom_annotation = time_col)
+
+#?��s
+time_col <- HeatmapAnnotation(text =
+    anno_text(sapply(as.character(colnames(v_yx)[seq(1,length(v_yx) - 1, 24)]),
+      function(x) {substr(x, 1, 4)}),
+                          rot = 90, just = "left", offset = unit(2, "mm")))
+time_col <- HeatmapAnnotation(cn = function(index) {
+    grid.text(sapply(as.character(colnames(v_yx)[seq(1,length(v_yx) - 1, 24)]),
+      function(x) {substr(x, 1, 4)}), seq(1,length(v_yx) - 1, 24)/length(v_yx),
+      1, just = c("center", "top"))})
+cgroup <- data.frame(group = v_yx[,length(v_yx)])
+colr <- rainbow(6)
+names(colr) <- c("usage", "population", "salary", "price", "index", "oil")
+c <-   HeatmapAnnotation(df = cgroup, col = list(group = colr), which = "row",
+        show_annotation_name = T,  annotation_name_rot = 90) +
+  Heatmap(t(v_yx01), name = "heat" , col = rb, 
+        cluster_rows = T, clustering_distance_rows = function(x) {dist(x, 
+                     method = "DTW")}, clustering_method_rows = "average",
+        row_dend_width = unit(15, "mm"),
+        row_dend_side = "left", cluster_columns = F, column_title = "Time", 
+        column_title_side = "bottom", row_title = "variables",
+        row_title_side = "right", show_column_names = F, show_row_names = T,
+        bottom_annotation = time_col)
+```
+
+---
+
+```{r Show Clustering, results = "hide"}
+lapply(seq(3,9,3), function(x) eval(parse(text = paste0("c", x))))
+c15
+```
+
+
+#4. Dimension Reduction {.tabset}
+
+##LCMC
+```{r lcmc}
+#lag1
+lcmc.func <- function(file, newpoints, k){
+  file %>%
+  .[, c(1:2, 4:11)] %>%
+  scale() %>%
+  {coranking(as.matrix(dist.matrix(., method="euclidean", as.dist = T)),
+              as.matrix(dist.matrix(newpoints, method="euclidean", as.dist = T)),
+              input ="dist")} -> co.ranking
+  coRanking::LCMC(co.ranking, K = k) -> lcmc
+  ls <- list("lcmc" = lcmc)
+}
+```
+
+##PCA set
+```{r}
+myfviz_pca_var <- function (X, axes = c(1, 2), geom = c("arrow", "text"), geom.var = geom, 
+    repel = FALSE, col.var = "black", fill.var = "white", alpha.var = 1, 
+    col.quanti.sup = "blue", col.circle = "grey70", select.var = list(name = NULL, 
+        cos2 = NULL, contrib = NULL), ...) 
+{
+    fviz(X, element = "var", axes = axes, geom = geom.var, color = col.var, 
+        fill = fill.var, alpha = alpha.var, select = select.var, 
+        repel = repel, col.col.sup = col.quanti.sup, col.circle = col.circle, labelsize = 6,
+        ...)
+}
+```
+
+##PCA
+```{r PCA}
+
+library(FactoMineR)
+library(factoextra)
+library(corrplot)
+pca.func <- function(file, k){
+  scale.file <- file %>%
+  .[, c(1:2, 4:11)] %>%
+  scale()
+  FactoMineR::PCA(X = scale.file, graph = FALSE) -> mypca
+  pcascore <- mypca$ind$coord
+  pcaloadings <- sweep(mypca$var$coord, 2,
+                       sqrt(mypca$eig[1:ncol(mypca$var$coord), 1]), FUN="/")
+  #newpoints <- as.matrix(file[, c(1:2, 4:11)]) %*% pcaloadings
+
+  eig <- get_eigenvalue(mypca)
+  scrplot <- fviz_eig(mypca, addlabels = TRUE, ylim = c(0, 50)) +
+    theme(axis.text.x = element_text(size = 20),
+        axis.text.y = element_text(size = 20),
+        axis.title.x = element_text(size = 20, margin = margin(20, 0, 0, 0)),
+        axis.title.y = element_text(size = 20, margin = margin(0, 20, 0, 0)),
+        plot.title = element_text(size = 30, hjust = 0.5, margin = margin(0, 0, 20, 0)),
+        plot.margin = unit(c(1,1,1.5,1.2),"cm"))
+    
+  var <- get_pca_var(mypca)
+  #var$coord #the correlation of variables
+  #corplot <- corrplot(var$cos2, is.corr=FALSE)
+  #fviz_cos2(mypca, choice = "var", axes = 1:3)
+  corrcircle <- myfviz_pca_var(mypca, col.var = "cos2",
+               gradient.cols = c("blue", "green", "red"),
+               repel = TRUE) 
+  #coranking
+  # co.ranking <- coranking(scale.file, pcascore, input ="data")
+  # co.plot <- imageplot(co.ranking, lwd = 2, bty = "n", main = "co-ranking matrix")
+  # lcmc <- LCMC(co.ranking, K = 1:nrow(co.ranking))
+  #list
+  pca.list <- list("pca" = mypca, "pcascore" = pcascore, "eig" = eig, 
+                   "scrplot" = scrplot, "var" = var, "corrcircle" = corrcircle,
+                   "pcaloadings" = pcaloadings)
+                   #"co.ranking" = co.ranking, "co.plot" = co.plot, "lcmc" = lcmc)
+  return(pca.list)
+}
+
+pca <- read.csv("pcascore.csv", header = T) %>% .[,-1]
+
+in.sample %>%
+  .[, c(1:2, 4:11)] %$%
+  scale(.) %>% 
+  princomp(.,scores = T) -> pca
+pca$scores
+mypca <- pca.func(in.sample, 5)
+mypca$pcascore
+
+
+#??3???A??80%?H?W
+
+
+mypca$scrplot
+mypca$corrcircle +
+  theme(text = element_text(size = 15))
+
+#LCMC
+beginning <- Sys.time()
+pca.lcmc.ls <- lapply(2:3, function(x){
+  lcmc.func(log.file, mypca$pcascore[, 1:x], seq(3, 15, 3))
+})
+end <- Sys.time()
+
+
+#write.csv(x = pca.list[[2]]$pcascore, file = "FullPCA_scores.csv", sep = ",")
+#write.csv(x = pca.list[[2]]$pcaloadings, file = "FullPCA_loadings.csv", sep = ",")
+
+# plot(x = temp.pca$ind$coord[, 1], y = temp.pca$ind$coord[, 2], type = "n")
+# text(x = temp.pca$ind$coord[, 1], y = temp.pca$ind$coord[, 2],
+#      label = rep(1:12, each = 224), col = rep(1:12, each = 224), cex = 1)
+
+```
+
+##ISOMAP
+```{r ISOMAP}
+#secand isomap function
+library(dimRed)
+library(RANN)
+iso.fun <- function(file, n, k){
+  scale.file <- file %>%
+  .[, c(1:2, 4:11)] %>%
+  scale()
+  emb2 <- embed(scale.file, "Isomap", mute = NULL, knn = k, ndim = n)
+  plot(emb2, type = "2vars")
+  emb2@data
+  isolist <- list("isomap" = emb2, "newpoints" = emb2@data)
+  return(isolist)
+}
+```
+
+##test iso
+```{r}
+#?M?wISOMAP & LCMC neighbors
+#test iso lcmc
+list.file <- list.files(path = ".", pattern = "iso_dim5_[0-9]+_[0-9]+.csv")
+list.file %<>% lapply(., function(x){
+  read.csv(file = x, header = T)
+}) 
+
+df.iso <- cbind(list.file[[1]], list.file[[2]], list.file[[3]], list.file[[4]],
+                list.file[[5]], list.file[[6]]) %>% .[,-seq(1, 96, 16)]
+colnames(df.iso) <- rep(seq(16, 50, 2), each = 5)
+
+#iso
+iso <- df.iso[, 46:49]
+colnames(iso) <- sapply(1:4, function(x){paste0("iso",x)})
+
+#ISOMAP LCMC & Plot
+iso_lcmc_fun <- function(file, d) {
+  lcmc.df <- as.data.frame(lapply(seq(1,90,5), function(x){
+    lcmc.func(as.matrix(file), as.matrix(df.iso[,x:(d+x-1)]), c(seq(2, 262, 20), 288))
+  }))
+  colnames(lcmc.df) <- sapply(seq(16 , 50, 2), function(x){paste0("iso", x)})
+  lcmc.df$neighbor <- c(seq(2, 262, 20), 288)
+  lcmc <- lcmc.df %>%
+    gather(., key = "iso", value = "LCMC", 1:18) %>%
+    dplyr::arrange(neighbor)
+  lcmc$iso <- as.factor(lcmc$iso)
+  graph <- lcmc %>%
+    ggplot(data = ., aes(x = neighbor, y = LCMC, group = iso)) +
+    geom_line(aes(color = iso),
+            alpha = 0.5, position = position_dodge(0.8)) + 
+    labs(y = "LCMC", x = "neighbor", title = paste0("ISO", d, "-LCMC")) +
+    scale_color_manual(values = tim.colors(18), name = "iso") +
+    theme(legend.key.width = unit(2, "line"))
+  ls <- list("graph" = graph, "lcmc" = lcmc.df)
+  return(ls)
+}
+
+iso.dim.2 <- iso_lcmc_fun(in.sample[, 1:11], 2)
+iso.dim.3 <- iso_lcmc_fun(in.sample[, 1:11], 3)
+iso.dim.4 <- iso_lcmc_fun(in.sample[, 1:11], 4)
+iso.dim.5 <- iso_lcmc_fun(in.sample[, 1:11], 5)
+max.lcmc <- data.frame("neighbor" = c(seq(2, 262, 20), 288), 
+                  "D2_N16" = iso.dim.2$lcmc[,1], "D3_N44" = iso.dim.3$lcmc[,15],
+                  "D4_N44" = iso.dim.4$lcmc[,15], "D5_N44" = iso.dim.5$lcmc[,15])  %>%
+    gather(., key = "iso", value = "LCMC", 2:5) %>%
+    dplyr::arrange(neighbor)
+max.lcmc$iso <- as.factor(max.lcmc$iso)
+max.lcmc.graph <- max.lcmc %>% 
+  ggplot(data = ., aes(x = neighbor, y = LCMC, group = iso)) +
+    geom_line(aes(color = iso),
+            alpha = 0.5, position = position_dodge(0.8), size = 2) + 
+    labs(y = "LCMC", x = "Neighbors", title = paste0("ISOMAP-LCMC")) +
+    scale_color_manual(values = tim.colors(4), name = "Dimension_Neighbor") +
+    theme_bw() +
+    theme(legend.key.width = unit(2, "line"), axis.text.x = element_text(size = 20),
+        axis.text.y = element_text(size = 20),
+        axis.title.x = element_text(size = 20,
+                                    margin = margin(20, 0, 0, 0)),
+        axis.title.y = element_text(size = 20,
+                                    margin = margin(0, 20, 0, 0)),
+        plot.title = element_text(size = 30, hjust = 0.5, margin = margin(0, 0, 20, 0)),
+        legend.text = element_text(size = 15),
+        legend.title = element_text(size = 15),
+        legend.margin= margin(c(15,1,1,5)),
+        plot.margin = unit(c(1,1,1.5,1.2),"cm"))
+
+
+list_file <- list.files(path = ".", pattern = "iso_test_[0-9]+.csv")
+list_file %<>% lapply(., function(x){
+  tail(read.csv(file = x, header = T), 24)
+}) 
+
+iso.file <- rbind(list_file[[11]], list_file[[17]], list_file[[18]], list_file[[19]],
+                  list_file[[20]], list_file[[21]], list_file[[22]], list_file[[23]],
+                  list_file[[24]], list_file[[1]],list_file[[2]],  list_file[[3]],
+                  list_file[[4]], list_file[[5]], list_file[[6]], list_file[[7]],
+                  list_file[[8]], list_file[[9]], list_file[[10]], list_file[[12]],
+                  list_file[[13]], list_file[[14]], list_file[[15]], list_file[[16]])
+```
+
+
+##SIR
+```{r SIR}
+library(dr)
+sir.fun <- function(file, nslice, d) {
+  n.file <- file %>%
+  .[, 1:11] %>%
+  scale() %>% data.frame()
+  dr(Log.TotalUsage ~ Year + Month + Log.EconIndex + Log.EmployedNum +
+       Log.RegularEarnings + Log.CPI + Log.OilPrice + Log.IndustrialIndex +
+       Log.Import + Log.Export, n.file, nslices = nslice, chi2approx = "wood",
+     method="sir", numdir = 10) -> sir
+  summary(sir) %>% .$nslices -> slices
+  summary(sir) %>% .$evectors %>% .[, 1:d] -> eigvec
+  summary(sir) %>% .$evalues %>% .[1, ] -> eigv
+  cumsum(eigv / sum(eigv)) -> eigvperc
+  summary(sir) %>% .$test -> test
+  as.matrix(cbind(data.frame(as.matrix(file[, c(1:2,4:11)]) %*%
+            as.matrix(sir$evectors[, 1:d])))) -> vec
+  sir.list <- list("slices" = slices, "eigvperc" = eigvperc, "eigvec" = eigvec,
+                    "vec" = vec, "test" = test)
+  return(sir.list)
+}
+
+sir <- sir.fun(in.sample, 18, 7)$vec
+sir.eigvec <- sir.fun(in.sample, 18, 7)$eigvec
+
+
+```
+
+##test sir
+```{r}
+#?M?wSIR slices & LCMC neighbors
+#2 dim
+list.sir.21 <- lapply(seq(10, 100, 10), function(x){
+            sir.fun(lag1.tr, x, 2)$vec})
+sir.lcmc.21 <- lapply(list.sir.21, function(x) {
+    lcmc.func(lag1.tr, x, c(6, 12, 40, 70, 100, 140, 200, 350, 500, 700))})
+list.sir.22 <- lapply(seq(120, 300, 20), function(x){
+            sir.fun(lag1.tr, x, 2)$vec})
+sir.lcmc.22 <- lapply(list.sir.22, function(x) {
+    lcmc.func(lag1.tr, x, c(6, 12, 40, 70, 100, 140, 200, 350, 500, 700))})
+#3 dim
+list.sir.31 <- lapply(seq(10, 100, 10), function(x){
+            sir.fun(lag1.tr, x, 3)$vec})
+sir.lcmc.31 <- lapply(list.sir.31, function(x) {
+    lcmc.func(lag1.tr, x, c(6, 12, 40, 70, 100, 140, 200, 350, 500, 700))})
+list.sir.32 <- lapply(seq(120, 300, 20), function(x){
+            sir.fun(lag1.tr, x, 3)$vec})
+sir.lcmc.32 <- lapply(list.sir.32, function(x) {
+    lcmc.func(lag1.tr, x, c(6, 12, 40, 70, 100, 140, 200, 350, 500, 700))})
+#4 dim
+list.sir.41 <- lapply(seq(10, 100, 10), function(x){
+            sir.fun(lag1.tr, x, 4)$vec})
+sir.lcmc.41 <- lapply(list.sir.41, function(x) {
+    lcmc.func(lag1.tr, x, c(6, 12, 40, 70, 100, 140, 200, 350, 500, 700))})
+list.sir.42 <- lapply(seq(120, 300, 20), function(x){
+            sir.fun(lag1.tr, x, 4)$vec})
+sir.lcmc.42 <- lapply(list.sir.42, function(x) {
+    lcmc.func(lag1.tr, x, c(6, 12, 40, 70, 100, 140, 200, 350, 500, 700))})
+
+#SIR LCMC function
+sir_lcmc_fun <- function(file, k, nslice, n) {
+  df <- cbind(list("neighbor" = k), data.frame(file))
+  names(df)[2:11] <- paste0(nslice, "slices")
+  write.csv(df, file = paste0("sir_lcmc_", n, ".csv"), row.names = F)
+  sir_lcmc <- df %>%
+    gather(., key = "Slice", value = "LCMC", 2:length(.)) %>%
+    arrange(neighbor)
+  sir_lcmc$neighbor <- as.factor(sir_lcmc$neighbor)
+  sir_lcmc$Slice <- rep(nslice, 10)
+  gragh <- sir_lcmc %>%
+    ggplot(data = ., aes(x = Slice, y = LCMC, group = neighbor)) +
+    geom_line(aes(color = neighbor),
+            alpha = 0.5, position = position_dodge(0.8)) +
+    labs(y = "LCMC", x = "Slice", title = paste0("SIR-LCMC", n)) +
+    scale_color_manual(values = tim.colors(10),
+                     name = "Neighbor") +
+    theme(legend.key.width = unit(2, "line"))
+  return(list("graph" = gragh, "df" = df))
+}
+
+sir_lcmc_fun(sir.lcmc.21, c(6, 12, 40, 70, 100, 140, 200, 350, 500, 700),
+             seq(10, 100, 10), 21)
+sir_lcmc_fun(sir.lcmc.22, c(6, 12, 40, 70, 100, 140, 200, 350, 500, 700),
+             seq(120, 300, 20), 22)
+sir_lcmc_fun(sir.lcmc.31, c(6, 12, 40, 70, 100, 140, 200, 350, 500, 700),
+             seq(10, 100, 10), 31)
+sir_lcmc_fun(sir.lcmc.32, c(6, 12, 40, 70, 100, 140, 200, 350, 500, 700),
+             seq(120, 300, 20), 32)
+sir_lcmc_fun(sir.lcmc.41, c(6, 12, 40, 70, 100, 140, 200, 350, 500, 700),
+             seq(10, 100, 10), 41)
+sir_lcmc_fun(sir.lcmc.42, c(6, 12, 40, 70, 100, 140, 200, 350, 500, 700),
+             seq(120, 300, 20), 42)
+```
+
+#Model
+##SVR
+```{r}
+library(e1071)
+# library(ModelMetrics)
+# svr.func <- function(file, ls){
+#   tune.svm(x,y,cost=10:100,gamma=seq(0,3,0.1))
+#   svr.tune <- tune.svm(Log.TotalUsage~., data = file, type = "eps-regression",
+#                    kernel = "radial", range = ls)
+#   #svr.plot <- plot(svm.tune)
+#   svr.best <- svr.tune$best.model
+#   svr.pred <- predict(svr.best, file)
+#   svr.rmse <- rmse(file$Log.TotalUsage, svr.pred)
+# 
+#   #?��~??RMSE
+#   Pred.df <- data.frame('Year' = file$Year, 'Pred' = svr.pred)
+#   year.rmse <- lapply(1989:2017, function(x){
+#     rmse(file[file$Year == x, 'Log.TotalUsage'], Pred.df[Pred.df$Year == x, 'Pred'])
+#   })
+#   
+#   svr.list <- list("model" = svr.tune, "plot" = svr.plot, predy = svr.pred,
+#                    "rmse" = svr.RMSE, "yearrmse" = year.rmse)
+#   return(svr.list)
+# }
+# 
+# ls <- list(cost = seq(0.05, 2, 0.05), 
+#            gamma = seq(0.01, 1, 0.02),
+#            epsilon = seq(0.01, 0.1, 0.02))
+
+
+install.packages("gputools")
+library(liquidSVM)
+
+
+#Faster Package
+install.packages("devtools")
+library(devtools)
+install_github("Danko-lab/Rgtsvm/Rgtsvm", args="--configure-args='--with-cuda-home=YOUR_CUDA_PATH --with-boost-home=YOU_BOOST_PATH'" )
+
+install_github("Danko-lab/Rgtsvm/Rgtsvm", args="-configure-args='--with-cuda-home=/usr/local/cuda --with-boost-home=/usr/local/cuda/boost_1_67_0/boost'")
+library(Rgtsvm)
+
+#PCA
+pca.data$Log.TotalUsage <- scale(log.file$Log.TotalUsage)
+#PCA?ᰵSVR?ҫ?
+svr.pca <- svr.func(pca.data, ls)
+
+install.packages("Matrix")
+library(Matrix)
+
+install.packages("rpusvm")
+library(rpusvm)
+#########Test#########
+
+a <- as.data.frame(matrix(sample(400, 400), ncol = 4), col.names = c("v1", "v2", "v3", "v4"))
+a[, c(1,3,4)] <- scale(a[, c(1,3,4)])
+#a$Year <- rep(1:10, each = 10)
+b <- as.data.frame(matrix(sample(400, 300), ncol = 3))
+c <- as.data.frame(matrix(c(4,8,10,105, 137, 185, 202, 247, 293, 353, 364, 298), ncol =4))
+svr.tune <- tune(svm, V1~., data = a, type = "eps-regression",
+                   kernel = "radial", range=list(cost = 0.05, 
+                                                 gamma = 0.01,
+                                                 epsilon = 0.01))
+svr.best <- svr.tune$best.model
+svr.pred <- predict(svr.best, c)
+
+  #svr.plot <- plot(svm.tune)
+  svr.best <- svr.tune$best.model
+  svr.pred <- predict(svr.best, a)
+Pred.df <- data.frame('Year' = rep(1:10, each = 10), 'Pred' = svr.pred)
+lapply(1:10, function(x){
+    rmse(a[a$Year == x, 'V1'], Pred.df[Pred.df$Year == x, 'Pred'])
+  })
+```
+
+##Isomap SVR
+1. DR data
+```{r iso data}
+#4 dim
+dr.iso2 <- cbind(lag1.tr[, 3:4], ls_iso_2[[4]][3])
+names(dr.iso2)[1:2] <- c("LogTotalUsage", "Lag1.Usage")
+#3 dim
+dr.iso3 <- cbind(lag1.tr[, 3:4], ls_iso_3[[4]][3])
+names(dr.iso3)[1:2] <- c("LogTotalUsage", "Lag1.Usage")
+#4 dim
+dr.iso4 <- cbind(lag1.tr[, 3:4], ls_iso_4[[4]][3])
+names(dr.iso4)[1:2] <- c("LogTotalUsage", "Lag1.Usage")
+#5 dim
+dr.iso5 <- cbind(lag1.tr[, 3:4], ls_iso_5[[4]][3])
+names(dr.iso5)[1:2] <- c("LogTotalUsage", "Lag1.Usage")
+```
+
+2. GA-RBF
+```{r}
+library(GA)
+#4 dim
+lst_CV_data <- lapply(1:17, function(i){
+  #?]?m?_?l???A?C?????@?~
+  list(train_data = dr.pca.2[1:(288*i), ], 
+         test_data = dr.pca.2[(288*i+1):(288*(i+1)),])
+})
+
+
+evalParams <- function(train_data, test_data, cost, gamma, epsilon) {
+    # Train
+    model <- svm(Log.TotalUsage~ Lag1.Usage+Lag2.Usage+Dim.1+Dim.2+Dim.3+Dim.4,
+                 data = train_data, cost = cost,
+                 gamma = gamma, epsilon = epsilon, type = "eps-regression", kernel = "radial")
+    # Test
+    rmse <- mean((predict(model, newdata = test_data) - test_data$LogTotalUsage) ^ 2)
+    return (rmse)
+}
+
+# Fitness function (to be maximized)
+# Parameter vector x is: (cost, gamma, epsilon)
+fitnessFunc <- function(x, Lst_CV_Data) {
+    # Retrieve the SVM parameters
+    cost_val <- x[1]
+    gamma_val <- x[2]
+    epsilon_val <- x[3]
+
+    # Use cross-validation to estimate the RMSE for each split of the dataset
+    rmse_vals <- sapply(Lst_CV_Data, function(in_data) with(in_data, 
+        evalParams(train_data, test_data, cost_val, gamma_val, epsilon_val)))
+    return (-mean(rmse_vals))
+}
+
+# Range of the parameter values to be tested
+# Parameters are: (cost, gamma, epsilon)
+theta_min <- c(cost = 1, gamma = 1, epsilon = 0.001)
+theta_max <- c(cost = 10, gamma = 3, epsilon = 0.01)
+
+# Run the genetic algorithm
+beginning <- Sys.time()
+results <- ga(type = "real-valued", fitness = fitnessFunc, lst_CV_data, 
+    names = names(theta_min), 
+    lower = theta_min, upper = theta_max,
+    popSize = 50, maxiter = 30, seed = 123)
+end <- Sys.time()
+summary(results)
+plot(results)
+
+
+```
+
+##SVR-Linear
+```{r}
+library(e1071)
+svr.func <- function(file, ls){
+  svr.tune <- tune(svm, LogTotalUsage~., data = file, type = "eps-regression",
+                   kernel = "linear", range = ls)
+  #svr.plot <- plot(svm.tune)
+  svr.best <- svr.tune$best.model
+  svr.pred <- predict(svr.best, file)
+  svr.list <- list("model" = svr.tune, "predy" = svr.pred)
+  return(svr.list)
+}
+
+ls <- list(cost = seq(0.01,1,0.02),
+           epsilon = seq(0.01,0.1, 0.01))
+
+
+svr.linear <- svr.func(dr.iso4, ls)
+```
+
+##iso test dr
+```{r}
+model <- svm(Log.TotalUsage~ ., data = dr.pca.2, cost = 10,
+                 gamma = 3, epsilon = 0.01, type = "eps-regression", kernel = "radial")
+
+RMSE(model$fitted, dr.pca.2$Log.TotalUsage)
+```
+
+##iso test dr
+```{r}
+iso.test <- function(i) {
+  iso <- log.file %>% 
+    .[1:((nrow(in.sample))+24*i),] %>% 
+    iso.fun(., 4, 34)
+  return(iso)
+}
+
+iso.test.10 <- iso.test(10)
+iso.test.11 <- iso.test(11)
+iso.test.12 <- iso.test(12)
+iso.test.13 <- iso.test(13)
+iso.test.14 <- iso.test(14)
+iso.test.15 <- iso.test(15)
+iso.test.16 <- iso.test(16)
+iso.test.17 <- iso.test(17)
+iso.test.18 <- iso.test(18)
+iso.test.19 <- iso.test(19)
+iso.test.20 <- iso.test(20)
+iso.test.21 <- iso.test(21)
+iso.test.22 <- iso.test(22)
+iso.test.23 <- iso.test(23)
+iso.test.24 <- iso.test(24)
+
+as.data.frame(iso.test.10$newpoints)
+write.csv(as.data.frame(iso.test.24$newpoints), "iso_test_24.csv", row.names = F)
+
+```
+
+
+```{r}
+lst_CV_data <- lapply(1:13, function(i){
+  #?]?m?_?l???A?C?????@?~
+  list(train_data = dr.sir.1[1:(1152 + (288*i)), ], 
+         test_data = dr.sir.1[((1152 + (288*i))+1):(1152 + (288*(i+1))),])
+})
+
+
+# lst_CV_data <- lapply(1, function(i){
+#   #?]?m?_?l???A?C?????@?~
+#   list(train_data = dr.iso.2[1:(1152 + (288*i)), ], 
+#          test_data = dr.iso.2[((1152 + (288*i))+1):(1152 + (288*(i+1))),])
+# })
+evalParams <- function(train_data, test_data, i, j, x) {
+  model <- svm(LogTotalUsage ~ ., data = train_data, gamma = i,
+            cost = j, epsilon = x,
+            type = "eps-regression", kernel = "radial")
+  rmse <- RMSE(predict(model, newdata = test_data), test_data$LogTotalUsage)
+  return (rmse)
+}
+
+fitnessFunc <- function(Lst_CV_Data) {
+    lapply(seq(1, 3, 0.5), function(i){
+    sapply(seq(10, 100, 30), function(j){
+    sapply(seq(0.001, 0.01, 0.003), function(x){
+    sapply(Lst_CV_Data, function(in_data) with(in_data, 
+        evalParams(train_data, test_data, i, j, x))) ->ls
+    return(mean(ls))
+    })
+    })
+    }) -> rmse_vals
+    return(rmse_vals)
+}
+
+beginning <- Sys.time()
+svr.temp <- fitnessFunc(lst_CV_data)
+end <- Sys.time()
+
+min.func <- function(list.file, g, c, e){
+  gamma <- sapply(1:g, function(x){
+    min(svr.temp[[x]])
+  })
+  i <- which(gamma == min(gamma))
+  j <- which(list.file[[i]] == min(list.file[[i]]))
+  if((j %% e) == 0){
+    cost <-  (j %/% e)
+    eps <- e
+  }else{
+    cost <-  (j %/% e) + 1
+    eps <- j %% e
+  }
+  return(list("gamma" = i, "cost" = cost, "eps" = eps))
+}
+
+
+min.func(svr.temp, 5, 4, 4)
+write.csv(as.data.frame(svr.temp), "svr_sir_1.csv", row.names = F)
+#     sapply(c(0.1, 1, 3), function(i){
+#     sapply(c(0.01, 10, 50), function(j){
+#     sapply(c(0.001, 0.01, 0.1), function(x){
+#     sapply(lst_CV_data, function(in_data) with(in_data, 
+#         evalParams(temp, temp.test, i, j, x)))
+#     })
+#     })
+#     }) -> rmse_vals
+#     
+# model <- svm(LogTotalUsage ~ ., data = temp, gamma = 0.1,
+#             cost = 0.01, epsilon = 0.01,
+#             type = "eps-regression", kernel = "radial")
+# rmse_vals
+# RMSE(predict(model, newdata = temp.test), temp.test$LogTotalUsage)
+```
+
+#Test Y
+```{r}
+log.file %>%
+  subset(Year > 2015) -> out.sample
+
+#test set
+logtotalusage.2018 <- read_xls("industry_2018.xls", col_names = T, skip = 1)
+logtotalusage.2018.1 <- rep(as.matrix(log(logtotalusage.2018[1,4])), each = 24)
+logtotalusage.2018.2 <- rep(as.matrix(log(logtotalusage.2018[1:2,4])), each = 24)
+logtotalusage.2018.3 <- rep(as.matrix(log(logtotalusage.2018[1:3,4])), each =24)
+
+#lag1
+#SIR
+sir.eigvec <- sir.fun(in.sample, 18, 7)$eigvec
+sir.1 <- out.sample %>% .[,c(1:2, 4:11)] %>% as.matrix(.) %*% sir.eigvec %>%
+  as.data.frame(.)
+log.file %>%
+  subset(Year > 2015) %>%
+  .[-c(1:24),3] %>% 
+  c(., logtotalusage.2018.1) %>%
+  data.frame("LogTotalUsage" = ., 
+             "Lag1.Usage" = out.sample$Log.TotalUsage) -> out.sample.1
+test.sir.1 <- cbind(out.sample.1, sir.1)
+
+#ISOMAP
+log.file %>%
+  subset(Year > 2015) %>%
+  .[-c(1:24),3] %>% 
+  c(., logtotalusage.2018.1) %>%
+  data.frame("LogTotalUsage" = ., 
+             "Lag1.Usage" = out.sample$Log.TotalUsage) -> out.sample.1
+test.iso.1 <- cbind(out.sample.1, iso.file)
+
+#RAW
+log.file %>%
+  subset(Year > 2015) %>%
+  .[-c(1:24),3] %>% 
+  c(., logtotalusage.2018.1) %>%
+  data.frame("LogTotalUsage" = ., 
+             "Lag1.Usage" = out.sample$Log.TotalUsage) -> out.sample.1
+test.raw.1 <- cbind(out.sample.1, out.sample[, c(1:2,4:11)])
+
+#lag2
+#SIR
+log.file %>%
+  subset(Year > 2015) %>%
+  .[-c(1:48),3] %>%
+  c(., logtotalusage.2018.2) %>%
+  data.frame("LogTotalUsage" = ., 
+             "Lag1.Usage" = out.sample.1$LogTotalUsage,
+             "Lag2.Usage" = out.sample$Log.TotalUsage) -> out.sample.2
+test.sir.2 <- cbind(out.sample.2, sir.1)
+test.sir.2$Lag1.Usage <- sir.lag1
+
+#ISOMAP
+log.file %>%
+  subset(Year > 2015) %>%
+  .[-c(1:48),3] %>%
+  c(., logtotalusage.2018.2) %>%
+  data.frame("LogTotalUsage" = ., 
+             "Lag1.Usage" = out.sample.1$LogTotalUsage,
+             "Lag2.Usage" = out.sample$Log.TotalUsage) -> out.sample.2
+test.iso.2 <- cbind(out.sample.2, iso.file)
+test.iso.2$Lag1.Usage <- iso.lag1
+
+#GA
+log.file %>%
+  subset(Year > 2015) %>%
+  .[-c(1:48),3] %>%
+  c(., logtotalusage.2018.2) %>%
+  data.frame("LogTotalUsage" = ., 
+             "Lag1.Usage" = out.sample.1$LogTotalUsage,
+             "Lag2.Usage" = out.sample$Log.TotalUsage) -> out.sample.2
+ga.iso.2 <- cbind(out.sample.2, iso.file)
+ga.iso.2$Lag1.Usage <- iso.ga.lag1
+
+#RAW
+log.file %>%
+  subset(Year > 2015) %>%
+  .[-c(1:48),3] %>%
+  c(., logtotalusage.2018.2) %>%
+  data.frame("LogTotalUsage" = ., 
+             "Lag1.Usage" = out.sample.1$LogTotalUsage,
+             "Lag2.Usage" = out.sample$Log.TotalUsage) -> out.sample.2
+test.raw.2 <- cbind(out.sample.2,  out.sample[, c(1:2,4:11)])
+test.raw.2$Lag1.Usage <- raw.lag1
+
+#lag3
+#SIR
+log.file %>%
+  subset(Year > 2015) %>%
+  .[-c(1:72),3] %>%
+  c(., logtotalusage.2018.3) %>%
+  data.frame("LogTotalUsage" = .,
+             "Lag1.Usage" = out.sample.2$LogTotalUsage,
+             "Lag2.Usage" = out.sample.1$LogTotalUsage,
+             "Lag3.Usage" = out.sample$Log.TotalUsage) -> out.sample.3
+test.sir.3 <- cbind(out.sample.3, sir.1)
+test.sir.3$Lag1.Usage <- sir.lag1
+test.sir.3$Lag2.Usage <- sir.lag2
+
+#ISOMAP
+log.file %>%
+  subset(Year > 2015) %>%
+  .[-c(1:72),3] %>%
+  c(., logtotalusage.2018.3) %>%
+  data.frame("LogTotalUsage" = .,
+             "Lag1.Usage" = out.sample.2$LogTotalUsage,
+             "Lag2.Usage" = out.sample.1$LogTotalUsage,
+             "Lag3.Usage" = out.sample$Log.TotalUsage) -> out.sample.3 
+test.iso.3 <- cbind(out.sample.3, iso.file)
+test.iso.3$Lag1.Usage <- iso.lag1
+test.iso.3$Lag2.Usage <- iso.lag2
+
+#RAW
+log.file %>%
+  subset(Year > 2015) %>%
+  .[-c(1:72),3] %>%
+  c(., logtotalusage.2018.3) %>%
+  data.frame("LogTotalUsage" = .,
+             "Lag1.Usage" = out.sample.2$LogTotalUsage,
+             "Lag2.Usage" = out.sample.1$LogTotalUsage,
+             "Lag3.Usage" = out.sample$Log.TotalUsage) -> out.sample.3 
+test.raw.3 <- cbind(out.sample.3, out.sample[, c(1:2,4:11)])
+test.raw.3$Lag1.Usage <- raw.lag1
+test.raw.3$Lag2.Usage <- raw.lag2
+```
+
+
+#SVR SIR
+```{r}
+library(e1071)
+library(DescTools)
+#lag1
+test.svr.sir.1 <- svm(LogTotalUsage ~ ., data = dr.sir.1, gamma = 1,
+            cost = 70, epsilon = 0.001, type = "eps-regression", kernel = "radial")
+test.svr.sir.1$call
+sir.rmse.1 <- RMSE(predict(test.svr.sir.1, newdata = test.sir.1), test.sir.1$LogTotalUsage)
+sir.lag1 <- predict(test.svr.sir.1, newdata = test.sir.1)
+
+#plot
+sir.svr.1 <- data.frame("Date" = c(Matrix$Date[326:348],
+              as.POSIXct(paste0(logtotalusage.2018$X__1[1], "-01"), format = "%Y-%m-%d")),
+              "Predict" = sapply(seq(1,576,24), function(x) {
+                          mean(sir.lag1[x:x+23])}), 
+              "True" = unique(test.sir.1$LogTotalUsage)) %>%
+              gather(., key = "Type", value = "LogTotalUsage", 2:length(.)) %>%
+              dplyr::arrange(Date)
+sir.svr.1 %>% 
+  ggplot(data = ., aes(x = Date, y = LogTotalUsage, group = Type)) +
+    geom_line(aes(color = Type),
+            alpha = 0.5, position = position_dodge(0.8)) + 
+    labs(y = "LogTotalUsage", x = "Date", title = paste0("SIR LAG1")) +
+    scale_color_manual(values = tim.colors(2), name = "type") +
+    theme(legend.key.width = unit(2, "line"))
+
+#lag2
+test.svr.sir.2 <- svm(LogTotalUsage ~ ., data = dr.sir.2, gamma = 1,
+            cost = 40, epsilon = 0.001, type = "eps-regression", kernel = "radial")
+sir.rmse.2 <- RMSE(predict(test.svr.sir.2, newdata = test.sir.2), test.sir.2$LogTotalUsage)
+sir.lag2 <- predict(test.svr.sir.2, newdata = test.sir.2)
+sir.svr.2 <- data.frame("Date" = c(Matrix$Date[327:348],
+              as.POSIXct(paste0(logtotalusage.2018$X__1[1], "-01"), format = "%Y-%m-%d"),
+              as.POSIXct(paste0(logtotalusage.2018$X__1[2], "-01"), format = "%Y-%m-%d")),
+              "Predict" = sapply(seq(1,576,24), function(x) {
+                          mean(sir.lag2[x:x+23])}), 
+              "True" = unique(test.sir.2$LogTotalUsage)) %>%
+              gather(., key = "Type", value = "LogTotalUsage", 2:length(.)) %>%
+              dplyr::arrange(Date)
+sir.svr.2 %>% 
+  ggplot(data = ., aes(x = Date, y = LogTotalUsage, group = Type)) +
+    geom_line(aes(color = Type),
+            alpha = 0.5, position = position_dodge(0.8)) + 
+    labs(y = "LogTotalUsage", x = "Date", title = paste0("SIR LAG2")) +
+    scale_color_manual(values = tim.colors(2), name = "type") +
+    theme(legend.key.width = unit(2, "line"))
+
+#lag3
+test.svr.sir.3 <- svm(LogTotalUsage ~ ., data = dr.sir.3, gamma = 1,
+            cost = 70, epsilon = 0.001, type = "eps-regression", kernel = "radial")
+sir.rmse.3 <- RMSE(predict(test.svr.sir.3, newdata = test.sir.3), test.sir.3$LogTotalUsage)
+sir.lag3 <- predict(test.svr.sir.3, newdata = test.sir.3)
+sir.svr.3 <- data.frame("Date" = c(Matrix$Date[328:348],
+              as.POSIXct(paste0(logtotalusage.2018$X__1[1], "-01"), format = "%Y-%m-%d"),
+              as.POSIXct(paste0(logtotalusage.2018$X__1[2], "-01"), format = "%Y-%m-%d"),
+              as.POSIXct(paste0(logtotalusage.2018$X__1[3], "-01"), format = "%Y-%m-%d")),
+              "Predict" = sapply(seq(1,576,24), function(x) {
+                          mean(sir.lag3[x:x+23])}), 
+              "True" = unique(test.sir.3$LogTotalUsage)) %>%
+              gather(., key = "Type", value = "LogTotalUsage", 2:length(.)) %>%
+              dplyr::arrange(Date)
+sir.svr.3 %>% 
+  ggplot(data = ., aes(x = Date, y = LogTotalUsage, group = Type)) +
+    geom_line(aes(color = Type),
+            alpha = 0.5, position = position_dodge(0.8)) + 
+    labs(y = "LogTotalUsage", x = "Date", title = paste0("SIR LAG3")) +
+    scale_color_manual(values = tim.colors(2), name = "type") +
+    theme(legend.key.width = unit(2, "line"))
+
+#SIR SVR plot
+sir.svr.df1 <- data.frame("Date" = c(Matrix$Date[326:348],
+              as.POSIXct(paste0(logtotalusage.2018$X__1[1], "-01"), format = "%Y-%m-%d")),
+              "Predict" = sapply(seq(1,576,24), function(x) {
+                          mean(sir.lag1[x:x+23])}), 
+              "True" = unique(test.sir.1$LogTotalUsage))
+sir.svr.df2 <- data.frame("Date" = c(Matrix$Date[327:348],
+              as.POSIXct(paste0(logtotalusage.2018$X__1[1], "-01"), format = "%Y-%m-%d"),
+              as.POSIXct(paste0(logtotalusage.2018$X__1[2], "-01"), format = "%Y-%m-%d")),
+              "Predict" = sapply(seq(1,576,24), function(x) {
+                          mean(sir.lag2[x:x+23])}), 
+              "True" = unique(test.sir.2$LogTotalUsage))
+sir.svr.df3 <- data.frame("Date" = c(Matrix$Date[328:348],
+              as.POSIXct(paste0(logtotalusage.2018$X__1[1], "-01"), format = "%Y-%m-%d"),
+              as.POSIXct(paste0(logtotalusage.2018$X__1[2], "-01"), format = "%Y-%m-%d"),
+              as.POSIXct(paste0(logtotalusage.2018$X__1[3], "-01"), format = "%Y-%m-%d")),
+              "Predict" = sapply(seq(1,576,24), function(x) {
+                          mean(sir.lag3[x:x+23])}), 
+              "True" = unique(test.sir.3$LogTotalUsage))
+#????
+total.date <- substr(
+  as.character(seq.Date(as.Date("2016-02-01"), as.Date("2018-03-01"), by = "5 months")), 
+  1, 7)
+#ø??
+extrafont::font_import("C:/Windows/Fonts/", pattern = "kaiu", prompt = F)
+
+# font_import("C:/indows/Fonts/", pattern)
+# windowsFont(family = "DFKai-SB")
+# par(family = "DFKai-SB")
+plot(x = 1:26, y = c(unique(out.sample$Log.TotalUsage)[-1],unique(logtotalusage.2018.3)), type = "l", col = "black", 
+     ylim = c(2,3), ylab = "企業用電量", xlab = "", main = "預測結果 (SIR)",
+     xlim = c(1,26), xaxt = "n", lwd = 2, cex.main = 1.7, cex.lab = 1.4, cex.axis = 1.2)
+par(new = T)
+plot(x = 1:24, y = sapply(seq(1,576,24), function(x) {
+                          mean(sir.lag1[x:x+23])}), type = "l", col = "red", 
+     ylim = c(2,3), ylab = "", xlab = "", main = "",
+     xlim = c(1,26), xaxt = "n", yaxt = "n", cex = 1.5, lwd = 2)
+par(new = T)
+plot(x = 2:25, y = sapply(seq(1,576,24), function(x) {
+                          mean(sir.lag2[x:x+23])}), type = "l", col = "blue", 
+     ylim = c(2,3), ylab = "", xlab = "", xlim = c(1,26), xaxt = "n", yaxt = "n",cex = 1.5, lwd = 2)
+par(new = T)
+plot(x = 3:26, y = sapply(seq(1,576,24), function(x) {
+                          mean(sir.lag3[x:x+23])}), type = "l", col = "green", xlim = c(1,26),
+     ylim = c(2,3), ylab = "", xlab = "", xaxt = "n", yaxt = "n",main = "", cex = 1.5, lwd = 2)
+axis(1, 
+    at = seq(1,26,5),
+    labels = total.date,
+          las = 2, cex.axis = 1.4)
+plot(x = rep(26,4), y = seq(1,1.6,0.2), col = c("black", "red", "blue", "green"), 
+     pch = 20, cex = 2, ylim = c(0.8,2))
+text(x = rep(27.5,4), y = seq(1,1.6,0.2), labels = c("實際值", "一期預測",
+                                                    "二期預測", "三期預測"))
+
+```
+
+#SVR ISOMAP
+```{r}
+#lag1
+test.svr.iso.1 <- svm(LogTotalUsage ~ ., data = dr.iso.1, gamma = 1,
+            cost = 10, epsilon = 0.01, type = "eps-regression", kernel = "radial")
+iso.rmse.1 <- RMSE(predict(test.svr.iso.1, newdata = test.iso.1), test.iso.1$LogTotalUsage)
+iso.lag1 <- predict(test.svr.iso.1, newdata = test.iso.1)
+iso.svr.1 <- data.frame("Date" = c(Matrix$Date[326:348],
+              as.POSIXct(paste0(logtotalusage.2018$X__1[1], "-01"), format = "%Y-%m-%d")),
+              "Predict" = sapply(seq(1,576,24), function(x) {
+                          mean(iso.lag1[x:x+23])}), 
+              "True" = unique(test.iso.1$LogTotalUsage)) %>%
+              gather(., key = "Type", value = "LogTotalUsage", 2:length(.)) %>%
+              dplyr::arrange(Date)
+iso.svr.1 %>% 
+  ggplot(data = ., aes(x = Date, y = LogTotalUsage, group = Type)) +
+    geom_line(aes(color = Type),
+            alpha = 0.5, position = position_dodge(0.8)) + 
+    labs(y = "LogTotalUsage", x = "Date", title = paste0("ISOMAP LAG1")) +
+    scale_color_manual(values = tim.colors(2), name = "type") +
+    theme(legend.key.width = unit(2, "line"))
+
+#GA
+test.ga.iso.1 <- svm(LogTotalUsage ~ ., data = dr.iso.1, gamma = 0.0601,
+            cost = 0.8248, epsilon = 0.2652, type = "eps-regression", kernel = "radial")
+iso.ga.rmse.1 <- RMSE(predict(test.ga.iso.1, newdata = test.iso.1),
+                      test.iso.1$LogTotalUsage)
+iso.ga.lag1 <- predict(test.ga.iso.1, newdata = test.iso.1)
+
+
+#lag2
+test.svr.iso.2 <- svm(LogTotalUsage ~ ., data = dr.iso.2, gamma = 1,
+            cost = 10, epsilon = 0.01, type = "eps-regression", kernel = "radial")
+iso.rmse.2 <- RMSE(predict(test.svr.iso.2, newdata = test.iso.2), test.iso.2$LogTotalUsage)
+iso.lag2 <- predict(test.svr.iso.2, newdata = test.iso.2)
+iso.svr.2 <- data.frame("Date" = c(Matrix$Date[327:348],
+              as.POSIXct(paste0(logtotalusage.2018$X__1[1], "-01"), format = "%Y-%m-%d"),
+              as.POSIXct(paste0(logtotalusage.2018$X__1[2], "-01"), format = "%Y-%m-%d")),
+              "Predict" = sapply(seq(1,576,24), function(x) {
+                          mean(iso.lag2[x:x+23])}), 
+              "True" = unique(test.iso.2$LogTotalUsage)) %>%
+              gather(., key = "Type", value = "LogTotalUsage", 2:length(.)) %>%
+              dplyr::arrange(Date)
+iso.svr.2 %>% 
+  ggplot(data = ., aes(x = Date, y = LogTotalUsage, group = Type)) +
+    geom_line(aes(color = Type),
+            alpha = 0.5, position = position_dodge(0.8)) + 
+    labs(y = "LogTotalUsage", x = "Date", title = paste0("ISOMAP LAG2")) +
+    scale_color_manual(values = tim.colors(2), name = "type") +
+    theme(legend.key.width = unit(2, "line"))
+
+#GA
+test.ga.iso.2 <- svm(LogTotalUsage ~ ., data = dr.iso.2, gamma = 0.0159,
+            cost = 1.7678, epsilon = 0.2023, type = "eps-regression", kernel = "radial")
+iso.ga.rmse.2 <- RMSE(predict(test.ga.iso.2, newdata = ga.iso.2),
+                      ga.iso.2$LogTotalUsage)
+iso.ga.lag2 <- predict(test.ga.iso.2, newdata = ga.iso.2)
+
+#lag3
+test.svr.iso.3 <- svm(LogTotalUsage ~ ., data = dr.iso.3, gamma = 1,
+            cost = 10, epsilon = 0.001, type = "eps-regression", kernel = "radial")
+iso.rmse.3 <- RMSE(predict(test.svr.iso.3, newdata = test.iso.3), test.iso.3$LogTotalUsage)
+iso.lag3 <- predict(test.svr.iso.3, newdata = test.iso.3)
+iso.svr.3 <- data.frame("Date" = c(Matrix$Date[328:348],
+              as.POSIXct(paste0(logtotalusage.2018$X__1[1], "-01"), format = "%Y-%m-%d"),
+              as.POSIXct(paste0(logtotalusage.2018$X__1[2], "-01"), format = "%Y-%m-%d"),
+              as.POSIXct(paste0(logtotalusage.2018$X__1[3], "-01"), format = "%Y-%m-%d")),
+              "Predict" = sapply(seq(1,576,24), function(x) {
+                          mean(iso.lag3[x:x+23])}), 
+              "True" = unique(test.iso.3$LogTotalUsage)) %>%
+              gather(., key = "Type", value = "LogTotalUsage", 2:length(.)) %>%
+              dplyr::arrange(Date)
+iso.svr.3 %>% 
+  ggplot(data = ., aes(x = Date, y = LogTotalUsage, group = Type)) +
+    geom_line(aes(color = Type),
+            alpha = 0.5, position = position_dodge(0.8)) + 
+    labs(y = "LogTotalUsage", x = "Date", title = paste0("ISOMAP LAG3")) +
+    scale_color_manual(values = tim.colors(2), name = "type") +
+    theme(legend.key.width = unit(2, "line"))
+
+#????
+total.date <- substr(
+  as.character(seq.Date(as.Date("2016-02-01"), as.Date("2018-03-01"), by = "5 months")), 
+  1, 7)
+#ø??
+plot(x = 1:26, y = c(unique(out.sample$Log.TotalUsage)[-1],unique(logtotalusage.2018.3)), type = "l", col = "black", 
+     ylim = c(2,3), ylab = "企業用電量", xlab = "", main = "預測結果(ISOMAP)",
+     xlim = c(1,26), xaxt = "n", lwd = 2, cex.main = 1.7, cex.lab = 1.4, cex.axis = 1.2)
+par(new = T)
+plot(x = 1:24, y = sapply(seq(1,576,24), function(x) {
+                          mean(iso.lag1[x:x+23])}), type = "l", col = "red", 
+     ylim = c(2,3), ylab = "", xlab = "", main = "",
+     xlim = c(1,26), xaxt = "n", yaxt = "n", cex = 1.5, lwd = 2)
+par(new = T)
+plot(x = 2:25, y = sapply(seq(1,576,24), function(x) {
+                          mean(iso.lag2[x:x+23])}), type = "l", col = "blue", 
+     ylim = c(2,3), ylab = "", xlab = "", xlim = c(1,26), xaxt = "n", yaxt = "n", cex = 1.5, lwd = 2)
+par(new = T)
+plot(x = 3:26, y = sapply(seq(1,576,24), function(x) {
+                          mean(iso.lag3[x:x+23])}), type = "l", col = "green", xlim = c(1,26),
+     ylim = c(2,3), ylab = "", xlab = "", xaxt = "n",yaxt = "n",  main = "", cex = 1.5, lwd = 2)
+axis(1, 
+    at = seq(1,26,5),
+    labels = total.date,
+          las = 2, cex.axis = 1.4)
+plot(x = rep(26,4), y = seq(1,1.6,0.2), col = c("black", "red", "blue", "green"), 
+     pch = 20, cex = 2, ylim = c(0.8,2))
+text(x = rep(27.5,4), y = seq(1,1.6,0.2), labels = c("實際值", "一期預測",
+                                                    "二期預測", "三期預測"))
+```
+
+#SVR RAW
+```{r}
+#lag1
+test.svr.raw.1 <- svm(LogTotalUsage ~ ., data = raw.1, gamma = 1,
+            cost = 40, epsilon = 0.001, type = "eps-regression", kernel = "radial")
+raw.rmse.1 <- RMSE(predict(test.svr.raw.1, newdata = test.raw.1), test.raw.1$LogTotalUsage)
+raw.lag1 <- predict(test.svr.raw.1, newdata = test.raw.1)
+raw.svr.1 <- data.frame("Date" = c(Matrix$Date[326:348],
+              as.POSIXct(paste0(logtotalusage.2018$X__1[1], "-01"), format = "%Y-%m-%d")),
+              "Predict" = sapply(seq(1,576,24), function(x) {
+                          mean(raw.lag1[x:x+23])}), 
+              "True" = unique(test.raw.1$LogTotalUsage)) %>%
+              gather(., key = "Type", value = "LogTotalUsage", 2:length(.)) %>%
+              dplyr::arrange(Date)
+raw.svr.1 %>% 
+  ggplot(data = ., aes(x = Date, y = LogTotalUsage, group = Type)) +
+    geom_line(aes(color = Type),
+            alpha = 0.5, position = position_dodge(0.8)) + 
+    labs(y = "LogTotalUsage", x = "Date", title = paste0("RAW LAG1")) +
+    scale_color_manual(values = tim.colors(2), name = "type") +
+    theme(legend.key.width = unit(2, "line"))
+
+#lag2
+test.svr.raw.2 <- svm(LogTotalUsage ~ ., data = raw.2, gamma = 1,
+            cost = 10, epsilon = 0.001, type = "eps-regression", kernel = "radial")
+raw.rmse.2 <- RMSE(predict(test.svr.raw.2, newdata = test.raw.2), test.raw.2$LogTotalUsage)
+raw.lag2 <- predict(test.svr.raw.2, newdata = test.raw.2)
+raw.svr.2 <- data.frame("Date" = c(Matrix$Date[327:348],
+              as.POSIXct(paste0(logtotalusage.2018$X__1[1], "-01"), format = "%Y-%m-%d"),
+              as.POSIXct(paste0(logtotalusage.2018$X__1[2], "-01"), format = "%Y-%m-%d")),
+              "Predict" = sapply(seq(1,576,24), function(x) {
+                          mean(raw.lag2[x:x+23])}), 
+              "True" = unique(test.raw.2$LogTotalUsage)) %>%
+              gather(., key = "Type", value = "LogTotalUsage", 2:length(.)) %>%
+              dplyr::arrange(Date)
+raw.svr.2 %>% 
+  ggplot(data = ., aes(x = Date, y = LogTotalUsage, group = Type)) +
+    geom_line(aes(color = Type),
+            alpha = 0.5, position = position_dodge(0.8)) + 
+    labs(y = "LogTotalUsage", x = "Date", title = paste0("RAW LAG2")) +
+    scale_color_manual(values = tim.colors(2), name = "type") +
+    theme(legend.key.width = unit(2, "line"))
+
+#lag3
+test.svr.raw.3 <- svm(LogTotalUsage ~ ., data = raw.3, gamma = 1,
+            cost = 10, epsilon = 0.01, type = "eps-regression", kernel = "radial")
+raw.rmse.3 <- RMSE(predict(test.svr.raw.3, newdata = test.raw.3), test.raw.3$LogTotalUsage)
+raw.lag3 <- predict(test.svr.raw.3, newdata = test.raw.3)
+raw.svr.3 <- data.frame("Date" = c(Matrix$Date[328:348],
+              as.POSIXct(paste0(logtotalusage.2018$X__1[1], "-01"), format = "%Y-%m-%d"),
+              as.POSIXct(paste0(logtotalusage.2018$X__1[2], "-01"), format = "%Y-%m-%d"),
+              as.POSIXct(paste0(logtotalusage.2018$X__1[3], "-01"), format = "%Y-%m-%d")),
+              "Predict" = sapply(seq(1,576,24), function(x) {
+                          mean(raw.lag3[x:x+23])}), 
+              "True" = unique(test.raw.3$LogTotalUsage)) %>%
+              gather(., key = "Type", value = "LogTotalUsage", 2:length(.)) %>%
+              dplyr::arrange(Date)
+raw.svr.3 %>% 
+  ggplot(data = ., aes(x = Date, y = LogTotalUsage, group = Type)) +
+    geom_line(aes(color = Type),
+            alpha = 0.5, position = position_dodge(0.8)) + 
+    labs(y = "LogTotalUsage", x = "Date", title = paste0("RAW LAG3")) +
+    scale_color_manual(values = tim.colors(2), name = "type") +
+    theme(legend.key.width = unit(2, "line"))
+
+#????
+total.date <- substr(
+  as.character(seq.Date(as.Date("2016-02-01"), as.Date("2018-03-01"), by = "5 months")), 
+  1, 7)
+#ø??
+plot(x = 1:26, y = c(unique(out.sample$Log.TotalUsage)[-1],unique(logtotalusage.2018.3)), type = "l", col = "black", 
+     ylim = c(2,3), ylab = "企業用電量", xlab = "", main = "預測結果(無維度縮減)",
+     xlim = c(1,26), xaxt = "n", lwd = 2, cex.main = 1.7, cex.lab = 1.4, cex.axis = 1.2)
+par(new = T)
+plot(x = 1:24, y = sapply(seq(1,576,24), function(x) {
+                          mean(raw.lag1[x:x+23])}), type = "l", col = "red", 
+     ylim = c(2,3), ylab = "", xlab = "", main = "",
+     xlim = c(1,26), xaxt = "n", yaxt = "n", cex = 1.5, lwd = 2)
+par(new = T)
+plot(x = 2:25, y = sapply(seq(1,576,24), function(x) {
+                          mean(raw.lag2[x:x+23])}), type = "l", col = "blue", 
+     ylim = c(2,3), ylab = "", xlab = "", xlim = c(1,26), xaxt = "n", yaxt = "n", cex = 1.5, lwd = 2)
+par(new = T)
+plot(x = 3:26, y = sapply(seq(1,576,24), function(x) {
+                          mean(raw.lag3[x:x+23])}), type = "l", col = "green", xlim = c(1,26),
+     ylim = c(2,3), ylab = "", xlab = "", xaxt = "n", yaxt = "n", main = "", cex = 1.5, lwd = 2)
+axis(1, 
+    at = seq(1,26,5),
+    labels = total.date,
+          las = 2, cex.axis = 1.4)
+plot(x = rep(26,4), y = seq(1,1.6,0.2), col = c("black", "red", "blue", "green"), 
+     pch = 20, cex = 2, ylim = c(0.8,2))
+text(x = rep(27.5,4), y = seq(1,1.6,0.2), labels = c("實際值", "一期預測",
+                                                    "二期預測", "三期預測"))
+```
